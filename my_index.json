@@ -6,8 +6,8 @@
 	  "url": "https://raw.githubusercontent.com/mirosieber/OmniSensHome/main/OmniSensHome.ota",
 	  "imageType": 4113,
 	  "manufacturerCode": 4097,
-	  "sha512": "B7F30E581FB40CD8C8F47790DFF67142D811935A8749DDF1D681D4851AF63704869BAB7A8FC6956E30DBDB6252197063AB0D503C3CD70CDE0708FDE7994B45E2",
+	  "sha512": "b7f30e581fb40cd8c8f47790dff67142d811935a8749ddf1d681d4851af63704869bab7a8fc6956e30dbdb6252197063ab0d503c3cd70cde0708fde7994b45e2",
 	  "otaHeaderString": "OmniSensHome",
-	  "modelId": "OmniSenseHome"
+	  "modelId": "OmniSensHome"
 	}
 ]
