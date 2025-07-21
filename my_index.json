@@ -1,13 +1,13 @@
 [
 	{
-	  "fileName": "Zigbee_OTA_Client.ota",
-	  "fileVersion": 1,
-	  "fileSize": 634134,
-	  "url": "https://raw.githubusercontent.com/mirosieber/OmniSensHome/main/Zigbee_OTA_Client.ota",
-	  "imageType": 5678,
-	  "manufacturerCode": 1234,
-	  "sha512": "bf6754e195298bd24227d93fe5c293072f343136926e9fce36dd439f8343e694a61698f08df6de0b6ccdfbc3ba7f26e6b82eeaff601e378c3a52972e85011683",
-	  "otaHeaderString": "ZigbeeArduinoOTA",
+	  "fileName": "OmniSensHome.ota",
+	  "fileVersion": 16843024,
+	  "fileSize": 597006,
+	  "url": "https://raw.githubusercontent.com/mirosieber/OmniSensHome/main/OmniSensHome.ota",
+	  "imageType": 4113,
+	  "manufacturerCode": 4097,
+	  "sha512": "B7F30E581FB40CD8C8F47790DFF67142D811935A8749DDF1D681D4851AF63704869BAB7A8FC6956E30DBDB6252197063AB0D503C3CD70CDE0708FDE7994B45E2",
+	  "otaHeaderString": "OmniSensHome",
 	  "modelId": "OmniSenseHome"
 	}
 ]
