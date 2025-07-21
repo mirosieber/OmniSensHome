@@ -1,11 +1,11 @@
 [
 	{
 	  "fileName": "OmniSensHome.ota",
-	  "fileVersion": 16843023,
+	  "fileVersion": 16843027,
 	  "fileSize": 597006,
 	  "url": "https://raw.githubusercontent.com/mirosieber/OmniSensHome/main/OmniSensHome.ota",
 	  "imageType": 4113,
 	  "manufacturerCode": 4097,
-	  "modelId": "OmniSensHome"
+	  "modelId": "OmniSenseHome"
 	}
 ]
