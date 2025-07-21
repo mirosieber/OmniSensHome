@@ -1,20 +1,15 @@
-#include "esp32-hal.h"
-#include "Wire.h"
 #include "MTS4x.h"
 
+MTS4X::MTS4X() {}
 
-MTS4X::MTS4X(){
-
-}
-
-bool MTS4X::begin(int32_t sda, int32_t scl){
+bool MTS4X::begin(int32_t sda, int32_t scl) {
   if (Wire.begin(sda, scl) != true) {
     return false;
   }
   return true;
 }
 
-bool MTS4X::begin(int32_t sda, int32_t scl, MeasurementMode mode){
+bool MTS4X::begin(int32_t sda, int32_t scl, MeasurementMode mode) {
   if (Wire.begin(sda, scl) != true) {
     return false;
   }
@@ -23,16 +18,14 @@ bool MTS4X::begin(int32_t sda, int32_t scl, MeasurementMode mode){
   return true;
 }
 
-bool MTS4X::startSingleMessurement(){
-  return setMode(MEASURE_SINGLE, false);
-}
+bool MTS4X::startSingleMessurement() { return setMode(MEASURE_SINGLE, false); }
 
-bool MTS4X::setMode(MeasurementMode mode, bool heater){
+bool MTS4X::setMode(MeasurementMode mode, bool heater) {
   uint8_t command = 0;
   // set bits 7:6 – Mode
   command |= (mode & 0x03) << 6;
   // bits 5:4 = reserved, 00
-  if(heater){
+  if (heater) {
     // bits 3:0 – heater on with 0b1010
     command |= 0x0A;
   }
@@ -43,11 +36,11 @@ bool MTS4X::setMode(MeasurementMode mode, bool heater){
   return Wire.endTransmission();
 }
 
-bool MTS4X::setConfig(TempCfgMPS mps, TempCfgAVG avg, bool sleep){
+bool MTS4X::setConfig(TempCfgMPS mps, TempCfgAVG avg, bool sleep) {
   uint8_t command = 0;
-  command |= mps;    // Bits 7–5
-  command |= avg;    // Bits 4–3
-  command |= sleep ? 1 : 0;  // Bit 0
+  command |= mps;           // Bits 7–5
+  command |= avg;           // Bits 4–3
+  command |= sleep ? 1 : 0; // Bit 0
   // send command
   Wire.beginTransmission(MTS4X_ADDRESS);
   Wire.write(MTS4X_TEMP_CFG);
@@ -55,7 +48,7 @@ bool MTS4X::setConfig(TempCfgMPS mps, TempCfgAVG avg, bool sleep){
   return Wire.endTransmission();
 }
 
-float MTS4X::readTemperature(bool waitOnNewVal){
+float MTS4X::readTemperature(bool waitOnNewVal) {
   if (waitOnNewVal) {
     /*
     uint16_t cnt = 0;
@@ -68,9 +61,9 @@ float MTS4X::readTemperature(bool waitOnNewVal){
       }
     }
     */
-    delay(20); //Fixe wartezeit, da polling nicht geht
+    delay(20); // Fixe wartezeit, da polling nicht geht
   }
-  
+
   Wire.beginTransmission(MTS4X_ADDRESS);
   Wire.write(MTS4X_TEMP_LSB);
   Wire.endTransmission();
@@ -87,11 +80,11 @@ float MTS4X::readTemperature(bool waitOnNewVal){
   uint8_t msb = Wire.read();
 
   uint16_t rawTemp = ((uint16_t)msb << 8) | lsb;
-  
+
   return MTS4X_RAW_TO_CELSIUS(rawTemp);
 }
 
-bool MTS4X::inProgress(){
+bool MTS4X::inProgress() {
   Wire.beginTransmission(MTS4X_ADDRESS);
   Wire.write(MTS4X_STATUS);
   Wire.endTransmission();
