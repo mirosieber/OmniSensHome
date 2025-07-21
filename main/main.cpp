@@ -5,6 +5,7 @@
 #include "esp_zigbee_core.h"
 #include "esp_zigbee_ota.h"
 #include <MTS4x.h>
+#include <OPT300x.h>
 #include <ScioSense_ENS16x.h>
 #include <Wire.h>
 
