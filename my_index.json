@@ -1,7 +1,7 @@
 [
 	{
 	  "fileName": "Zigbee_OTA_Client.ota",
-	  "fileVersion": 016843009,
+	  "fileVersion": 1,
 	  "fileSize": 634134,
 	  "url": "https://raw.githubusercontent.com/mirosieber/OmniSensHome/main/Zigbee_OTA_Client.ota",
 	  "imageType": 0x5678,
