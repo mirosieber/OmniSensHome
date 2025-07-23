@@ -25,6 +25,22 @@ static int get_int(cJSON *obj, const char *key, int default_val) {
     return (item && cJSON_IsNumber(item)) ? item->valueint : default_val;
 }
 
+static int get_hex_address(cJSON *obj, const char *key, int default_val) {
+    cJSON *item = cJSON_GetObjectItem(obj, key);
+    if (item && cJSON_IsString(item)) {
+        char *hex_str = item->valuestring;
+        if (hex_str && strlen(hex_str) > 0) {
+            // Handle both "0x48" and "48" formats
+            if (strncmp(hex_str, "0x", 2) == 0 || strncmp(hex_str, "0X", 2) == 0) {
+                return (int)strtol(hex_str, NULL, 16);
+            } else {
+                return (int)strtol(hex_str, NULL, 16);
+            }
+        }
+    }
+    return default_val;
+}
+
 esp_err_t config_load(app_config_t *config) {
     memset(config, 0, sizeof(app_config_t));
 
@@ -120,7 +136,7 @@ esp_err_t config_load(app_config_t *config) {
             sensor_config_t *sc = &config->sensors[i];
             strcpy(sc->type, get_string(s, "Type", ""));
             sc->enabled = get_bool(s, "Enabled", false);
-            strcpy(sc->i2c_address, get_string(s, "I2cAddress", ""));
+            sc->i2c_address = get_hex_address(s, "I2cAddress", 0);
             sc->interrupt = get_int(s, "Interrupt", -1);
             sc->ws = get_int(s, "WS", -1);
             sc->sck = get_int(s, "SCK", -1);

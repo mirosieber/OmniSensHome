@@ -1,4 +1,4 @@
 idf_component_register(
-    SRCS "main.cpp" "configLoader.c"
+    SRCS "Sensoren.cpp" "main.cpp" "configLoader.c"
     INCLUDE_DIRS ""
 )

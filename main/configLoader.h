@@ -10,7 +10,7 @@
 typedef struct {
   char type[32];
   bool enabled;
-  char i2c_address[8];
+  int i2c_address;
   int interrupt;
   int ws, sck, sd;
   int rx, tx, out;
