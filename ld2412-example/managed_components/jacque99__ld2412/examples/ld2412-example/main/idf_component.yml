@@ -1,0 +1,5 @@
+dependencies:
+  espressif/button: "=*"
+  jacque99/ld2412:
+    version: "*"
+    override_path: '../../../'

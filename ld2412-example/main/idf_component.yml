@@ -1,0 +1,5 @@
+dependencies:
+  espressif/button:
+    version: =*
+  jacque99/ld2412:
+    version: '*'

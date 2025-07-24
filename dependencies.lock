@@ -288,6 +288,16 @@ dependencies:
     source:
       type: idf
     version: 5.4.2
+  jacque99/ld2412:
+    component_hash: 154e686ee752f5a30db041b27d502e373c3ee88a52bb93295a387e64a9519499
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.1.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.0.2
   joltwallet/littlefs:
     component_hash: 8e12955f47e27e6070b76715a96d6c75fc2b44f069e8c33679332d9bdd3120c4
     dependencies:
@@ -316,7 +326,8 @@ direct_dependencies:
 - espressif/qrcode
 - espressif/rmaker_common
 - idf
+- jacque99/ld2412
 - joltwallet/littlefs
-manifest_hash: d39bf0ed4512e1388bdc52c2f74958364be2162ffdfdc68fc85e9f3bae665e25
+manifest_hash: af5659d6f8a98f8dd8404bbc84ae4a04b8c9191aa3786a2c1905ec6aefed4111
 target: esp32c6
 version: 2.0.0
