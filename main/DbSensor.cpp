@@ -1,0 +1,64 @@
+#include "DbSensor.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <math.h>
+
+DbSensor::DbSensor(gpio_num_t bclk, gpio_num_t ws, gpio_num_t din,
+                   uint32_t sampleRate)
+    : _bclkPin(bclk), _wsPin(ws), _dataPin(din), _sampleRate(sampleRate) {}
+
+void DbSensor::begin() {
+  i2s_chan_config_t chan_cfg =
+      I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+  i2s_new_channel(&chan_cfg, &_rx_handle, nullptr);
+
+  i2s_std_config_t std_cfg = {
+      .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(_sampleRate),
+      .slot_cfg =
+          {
+              .data_bit_width = I2S_DATA_BIT_WIDTH_32BIT,
+              .slot_bit_width = I2S_SLOT_BIT_WIDTH_AUTO,
+              .slot_mode = I2S_SLOT_MODE_MONO,
+              .slot_mask = I2S_STD_SLOT_LEFT,
+              .ws_width = I2S_SLOT_BIT_WIDTH_AUTO,
+              .ws_pol = false,
+              .bit_shift = true,
+              .left_align = false,
+              .big_endian = false,
+              .bit_order_lsb = false,
+          },
+      .gpio_cfg = {.mclk = I2S_GPIO_UNUSED,
+                   .bclk = _bclkPin,
+                   .ws = _wsPin,
+                   .dout = I2S_GPIO_UNUSED,
+                   .din = _dataPin,
+                   .invert_flags = {
+                       .mclk_inv = false, .bclk_inv = false, .ws_inv = false}}};
+
+  i2s_channel_init_std_mode(_rx_handle, &std_cfg);
+  i2s_channel_enable(_rx_handle);
+}
+
+float DbSensor::getCurrentDb() {
+  int32_t buffer[_bufferSize];
+  size_t bytesRead = 0;
+
+  i2s_channel_read(_rx_handle, buffer, sizeof(buffer), &bytesRead,
+                   portMAX_DELAY);
+
+  int samples = bytesRead / sizeof(int32_t);
+  double sum = 0;
+
+  for (int i = 0; i < samples; ++i) {
+    int32_t sample = buffer[i] >> 8;
+    sum += sample * sample;
+  }
+
+  if (samples == 0)
+    return -120.0f;
+
+  double rms = sqrt(sum / samples);
+  double db = 20.0 * log10(rms);
+
+  return static_cast<float>(db);
+}

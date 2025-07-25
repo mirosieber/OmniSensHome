@@ -13,6 +13,7 @@
 
 #include "configLoader.h"
 
+#include "DbSensor.h"
 #include "MTS4x.h"
 #include "OPT300x.h"
 #include "SparkFun_ENS160.h"
@@ -20,6 +21,8 @@
 #include "ld2412.h"
 #include "uart_config.h"
 #include <AHTxx.h>
+
+static const char *TAG = "main";
 
 /* Zigbee OTA configuration */
 #define OTA_UPGRADE_RUNNING_FILE_VERSION                                       \
@@ -37,10 +40,13 @@ ZigbeeTempSensor zbTempSensor = ZigbeeTempSensor(3);
 ZigbeeTempSensor zbTempHumiditySensor = ZigbeeTempSensor(4);
 ZigbeeCarbonDioxideSensor zbAirQuality = ZigbeeCarbonDioxideSensor(5);
 ZigbeeAnalog zbDBSensor = ZigbeeAnalog(6);
-ZigbeeOccupancySensor zbOccupancySensor = ZigbeeOccupancySensor(7);
-ZigbeeContactSwitch zbContactSwitches[4] = {
-    ZigbeeContactSwitch(8), ZigbeeContactSwitch(9), ZigbeeContactSwitch(10),
-    ZigbeeContactSwitch(11)};
+ZigbeeBinary zbOccupancySensor = ZigbeeBinary(7);
+// Alternative: Use binary sensors instead of IAS contact switches (more
+// compatible)
+ZigbeeBinary zbBinarySensors[4] = {ZigbeeBinary(8), ZigbeeBinary(9),
+                                   ZigbeeBinary(10), ZigbeeBinary(11)};
+uint8_t switchNr =
+    0; // Variable to keep track of the number of contact switches
 ZigbeeLight zbRelays[4] = {ZigbeeLight(12), ZigbeeLight(13), ZigbeeLight(14),
                            ZigbeeLight(15)};
 
@@ -48,6 +54,8 @@ MTS4X MTS4Z = MTS4X();
 OPT300x opt3004;
 AHTxx aht21(AHTXX_ADDRESS_X38, AHTXX_I2C_SENSOR::AHT2x_SENSOR);
 SparkFun_ENS160 ens160;
+
+app_config_t *config;
 
 // LD2412 sensor variables
 static bool ld2412_initialized = false;
@@ -127,79 +135,248 @@ void configureSensor() {
 
 /************************ Temperature sensor task ****************************/
 static void temp_sensor_value_update(void *arg) {
+  // Wait for Zigbee network to be ready
+  while (!Zigbee.connected()) {
+    delay(100);
+  }
+
+  // Additional stabilization delay
+  delay(5000);
+
+  ESP_LOGI(TAG, "MTS4Z temperature sensor task starting...");
+
   for (;;) {
     MTS4Z.startSingleMessurement();
     float temperature = MTS4Z.readTemperature(true);
-    Serial.printf("[Temp Sensor] Temperature: %.2f°C\r\n", temperature);
-    zbTempSensor.setTemperature(temperature);
-    delay(1000);
+
+    // Validate temperature reading
+    if (temperature > -40.0 && temperature < 85.0) {
+      Serial.printf("[Temp Sensor] Temperature: %.2f°C\r\n", temperature);
+      zbTempSensor.setTemperature(temperature);
+    } else {
+      ESP_LOGW(TAG, "Invalid temperature reading: %.2f°C", temperature);
+    }
+
+    delay(5000); // Increased to 5 seconds to reduce load
   }
 }
 
 /********************* Lux sensor task **************************/
 static void lux_sensor_value_update(void *arg) {
+  // Wait for Zigbee network to be ready
+  while (!Zigbee.connected()) {
+    delay(100);
+  }
+
+  // Additional stabilization delay
+  delay(3000);
+
+  ESP_LOGI(TAG, "OPT3004 lux sensor task starting...");
+
   for (;;) {
     OPT300x_S result = opt3004.readResult();
     float lux = result.lux;
-    Serial.printf("[Lux Sensor] Lux: %.2f\r\n", lux);
-    if (lux > 0) {
-      float raw = 10000.0 * log10(lux);
-      zbLuxSensor.setIlluminance((uint16_t)raw);
+
+    if (result.error == NO_ERROR && lux >= 0) {
+      Serial.printf("[Lux Sensor] Lux: %.2f\r\n", lux);
+      if (lux > 0) {
+        float raw = 10000.0 * log10(lux);
+        zbLuxSensor.setIlluminance((uint16_t)raw);
+      } else {
+        zbLuxSensor.setIlluminance(0);
+      }
     } else {
-      zbLuxSensor.setIlluminance(0);
+      ESP_LOGW(TAG, "Error reading lux sensor or invalid value: %.2f", lux);
     }
-    delay(1000);
+
+    delay(5000); // Increased to 5 seconds
   }
 }
 
 /************ Temperature and humidity sensor task***************/
 static void temp_humidity_sensor_value_update(void *arg) {
+  // Wait for Zigbee network to be ready
+  while (!Zigbee.connected()) {
+    delay(100);
+  }
+
+  // Additional stabilization delay
+  delay(7000);
+
+  ESP_LOGI(TAG, "AHT21 temperature/humidity sensor task starting...");
+
   for (;;) {
     float ahtTemp =
         aht21.readTemperature(); // read 6-bytes via I2C, takes 80 milliseconds
     float ahtHumidity =
         aht21.readHumidity(AHTXX_USE_READ_DATA); // use data from temperature
                                                  // read, takes 0 milliseconds
-    Serial.printf(
-        "[Temp/Humidity Sensor] Temperature: %.2f°C, Humidity: %.2f%%\r\n",
-        ahtTemp, ahtHumidity);
-    zbTempHumiditySensor.setTemperature(ahtTemp);
-    zbTempHumiditySensor.setHumidity(ahtHumidity);
 
-    // ens160 compensation
-    ens160.setTempCompensationCelsius(ahtTemp);
-    ens160.setRHCompensationFloat(ahtHumidity);
-    uint16_t eco2 = ens160.getECO2();
-    uint16_t tvoc = ens160.getTVOC();
-    Serial.printf("[ENS160] eCO2: %d ppm, TVOC: %d ppb\r\n", eco2, tvoc);
-    zbAirQuality.setCarbonDioxide(eco2);
-    delay(1000);
+    // Validate readings
+    if (ahtTemp > -40.0 && ahtTemp < 85.0 && ahtHumidity >= 0.0 &&
+        ahtHumidity <= 100.0) {
+      Serial.printf(
+          "[Temp/Humidity Sensor] Temperature: %.2f°C, Humidity: %.2f%%\r\n",
+          ahtTemp, ahtHumidity);
+      zbTempHumiditySensor.setTemperature(ahtTemp);
+      zbTempHumiditySensor.setHumidity(ahtHumidity);
+
+      // ens160 compensation
+      ens160.setTempCompensationCelsius(ahtTemp);
+      ens160.setRHCompensationFloat(ahtHumidity);
+      uint16_t eco2 = ens160.getECO2();
+      uint16_t tvoc = ens160.getTVOC();
+
+      // Validate ENS160 readings
+      if (eco2 >= 400 && eco2 <= 65000) { // Typical eCO2 range
+        Serial.printf("[ENS160] eCO2: %d ppm, TVOC: %d ppb\r\n", eco2, tvoc);
+        zbAirQuality.setCarbonDioxide(eco2);
+      } else {
+        ESP_LOGW(TAG, "Invalid eCO2 reading: %d ppm", eco2);
+      }
+    } else {
+      ESP_LOGW(TAG, "Invalid AHT21 readings - Temp: %.2f°C, Humidity: %.2f%%",
+               ahtTemp, ahtHumidity);
+    }
+
+    delay(10000); // Increased to 10 seconds for this sensor combination
+  }
+}
+
+/*****************Db sensor task ****************/
+static void db_sensor_value_update(void *param) {
+  // Wait for Zigbee network to be ready
+  while (!Zigbee.connected()) {
+    delay(100);
+  }
+
+  // Additional stabilization delay
+  delay(8000);
+
+  ESP_LOGI(TAG, "INMP441 dB sensor task starting...");
+
+  // Find the correct sensor configuration index for INMP441
+  int sensor_index = -1;
+  for (uint8_t i = 0; config->sensors[i].type[0] != '\0'; i++) {
+    if (strcmp(config->sensors[i].type, "INMP441") == 0) {
+      sensor_index = i;
+      break;
+    }
+  }
+
+  if (sensor_index == -1) {
+    ESP_LOGE(TAG, "INMP441 sensor configuration not found");
+    vTaskDelete(NULL);
+    return;
+  }
+  zbDBSensor.setAnalogInputReporting(
+      0, 30, 10); // report every 30 seconds if value changes by 10
+  DbSensor dbSensor(static_cast<gpio_num_t>(config->sensors[sensor_index].sck),
+                    static_cast<gpio_num_t>(config->sensors[sensor_index].ws),
+                    static_cast<gpio_num_t>(config->sensors[sensor_index].sd));
+
+  // Sensor initialisieren
+  dbSensor.begin();
+
+  for (;;) {
+    float db = 40.0; // dbSensor.getCurrentDb();
+
+    // Validate dB reading (typical range for INMP441)
+    if (db >= 30.0 && db <= 130.0) {
+      Serial.printf("[dB Sensor] Sound level: %.2f dB\r\n", db);
+
+      // Use the actual dB value directly since we configured it as a dB sensor
+      zbDBSensor.setAnalogInput(db);
+
+      // Report the analog input value
+      zbDBSensor.reportAnalogInput();
+    } else {
+      ESP_LOGW(TAG, "Invalid dB reading: %.2f dB", db);
+    }
+
+    delay(1000); // Update every 100 milliseconds
+  }
+}
+
+// Simple contact switch state tracking (like Arduino example)
+static bool contact_states[4] = {false, false, false, false};
+
+/*****************contact switches task ****************/
+static void contact_switches_task(void *arg) {
+  ESP_LOGI(TAG, "=== Binary Sensor Monitoring Task ===");
+  ESP_LOGI(TAG, "Using binary sensors (more compatible than IAS zones)");
+
+  // Initialize contact states (like Arduino example)
+  for (uint8_t i = 0; i < 4; i++) {
+    if (config->switches[i].enabled) {
+      contact_states[i] = (digitalRead(config->switches[i].pin) == HIGH);
+      ESP_LOGI(TAG, "Binary sensor %d initialized: %s", i,
+               contact_states[i] ? "on" : "off");
+
+      // Set initial state for binary sensor
+      zbBinarySensors[i].setBinaryInput(contact_states[i]);
+    }
+  }
+
+  ESP_LOGI(
+      TAG,
+      "Binary sensor monitoring active - compatible with most coordinators");
+
+  for (;;) {
+    // Simple polling like the Arduino example
+    for (uint8_t i = 0; i < 4; i++) {
+      if (config->switches[i].enabled) {
+        // Check pin state (HIGH = on, LOW = off for binary sensors)
+        bool current_pin_state = (digitalRead(config->switches[i].pin) == HIGH);
+
+        // State change detection
+        if (current_pin_state != contact_states[i]) {
+          ESP_LOGI(TAG, "Binary sensor %d: %s -> %s", i,
+                   contact_states[i] ? "on" : "off",
+                   current_pin_state ? "on" : "off");
+
+          // Update binary sensor (should work with most coordinators)
+          zbBinarySensors[i].setBinaryInput(current_pin_state);
+          bool report_result = zbBinarySensors[i].reportBinaryInput();
+
+          if (report_result) {
+            ESP_LOGI(TAG, "✓ Binary sensor %d reported successfully", i);
+          } else {
+            ESP_LOGW(TAG, "✗ Binary sensor %d report failed", i);
+          }
+
+          contact_states[i] = current_pin_state;
+        }
+      }
+    }
+
+    delay(100); // Same delay as Arduino example
   }
 }
 
 /*************Presence Detection Task ****************/
 static void occupancy_sensor_value_update(void *arg) {
-  pinMode(15, INPUT_PULLUP);
-  for (;;) {
-
-    // Checking PIR sensor for occupancy change
-    static bool occupancy = false;
-    if (digitalRead(15) == HIGH && !occupancy) {
-      // Update occupancy sensor value
-      zbOccupancySensor.setOccupancy(true);
-      zbOccupancySensor.report();
-      occupancy = true;
-    } else if (digitalRead(15) == LOW && occupancy) {
-      zbOccupancySensor.setOccupancy(false);
-      zbOccupancySensor.report();
-      occupancy = false;
-    }
-    Serial.printf("[Occupancy Sensor] Occupancy: %s\r\n",
-                  occupancy ? "DETECTED" : "CLEAR");
-    delay(1000);
-  }
-
   /*
+    pinMode(15, INPUT_PULLUP);
+    for (;;) {
+
+      // Checking PIR sensor for occupancy change
+      static bool occupancy = false;
+      if (digitalRead(15) == HIGH && !occupancy) {
+        // Update occupancy sensor value
+        zbOccupancySensor.setBinaryInput(true);
+        zbOccupancySensor.reportBinaryInput();
+        occupancy = true;
+      } else if (digitalRead(15) == LOW && occupancy) {
+        zbOccupancySensor.setBinaryInput(false);
+        zbOccupancySensor.reportBinaryInput();
+        occupancy = false;
+      }
+      Serial.printf("[Occupancy Sensor] Occupancy: %s\r\n",
+                    occupancy ? "DETECTED" : "CLEAR");
+      delay(1000);
+    }
+  */
 
   const char *TAG = "Occupancy Sensor Task";
   // ESP_LOGI(TAG, "=== LD2412 Occupancy Sensor Task Started ===");
@@ -252,8 +429,8 @@ static void occupancy_sensor_value_update(void *arg) {
                       occupancy_detected ? "DETECTED" : "CLEAR");
 
         // Update Zigbee occupancy sensor
-        zbOccupancySensor.setOccupancy(occupancy_detected);
-        zbOccupancySensor.report(); // Report occupancy status
+        zbOccupancySensor.setBinaryInput(occupancy_detected);
+        zbOccupancySensor.reportBinaryInput(); // Report occupancy status
         // Additional analysis for debugging
         if (occupancy_detected) {
           if (target_state == 1) {
@@ -286,8 +463,8 @@ static void occupancy_sensor_value_update(void *arg) {
         // Clear occupancy if no data for extended period
         if (no_data_count > 15) { // 30 seconds of no data
           ESP_LOGW(TAG, "Extended timeout - clearing occupancy");
-          zbOccupancySensor.setOccupancy(false);
-          zbOccupancySensor.report(); // Report occupancy status
+          zbOccupancySensor.setBinaryInput(false);
+          zbOccupancySensor.reportBinaryInput(); // Report occupancy status
 
           // Try to recover UART communication
           if (no_data_count > 30) { // 60 seconds, attempt recovery
@@ -303,10 +480,7 @@ static void occupancy_sensor_value_update(void *arg) {
 
     delay(1000); // Small delay to prevent excessive CPU usage
   }
-    */
 }
-
-static const char *TAG = "main";
 
 extern "C" void app_main(void) {
   // Initialize Arduino runtime
@@ -318,7 +492,7 @@ extern "C" void app_main(void) {
   }
 
   // Allocate config on heap to avoid stack overflow
-  app_config_t *config = (app_config_t *)malloc(sizeof(app_config_t));
+  config = (app_config_t *)malloc(sizeof(app_config_t));
   if (config == NULL) {
     ESP_LOGE(TAG, "Failed to allocate memory for config");
     return;
@@ -343,16 +517,37 @@ extern "C" void app_main(void) {
   // Init button for factory reset
   pinMode(config->factory_reset_pin, INPUT_PULLUP);
 
-  // set Zigbee device name and model
-
+  // set Zigbee device name and model for all endpoints
   zbTempSensor.setManufacturerAndModel(config->device.manufacturer,
+                                       config->device.model);
+  zbTempHumiditySensor.setManufacturerAndModel(config->device.manufacturer,
+                                               config->device.model);
+  zbLuxSensor.setManufacturerAndModel(config->device.manufacturer,
+                                      config->device.model);
+  zbAirQuality.setManufacturerAndModel(config->device.manufacturer,
                                        config->device.model);
   zbOccupancySensor.setManufacturerAndModel(config->device.manufacturer,
                                             config->device.model);
+  zbRangeExtender.setManufacturerAndModel(config->device.manufacturer,
+                                          config->device.model);
+
+  // Set power source for all endpoints
   if (strcmp(config->device.power_supply, "battery") == 0) {
     zbTempSensor.setPowerSource(ZB_POWER_SOURCE_BATTERY);
+    zbTempHumiditySensor.setPowerSource(ZB_POWER_SOURCE_BATTERY);
+    zbLuxSensor.setPowerSource(ZB_POWER_SOURCE_BATTERY);
+    zbAirQuality.setPowerSource(ZB_POWER_SOURCE_BATTERY);
+    zbOccupancySensor.setPowerSource(ZB_POWER_SOURCE_BATTERY);
+    zbDBSensor.setPowerSource(ZB_POWER_SOURCE_BATTERY);
+    zbRangeExtender.setPowerSource(ZB_POWER_SOURCE_BATTERY);
   } else {
     zbTempSensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
+    zbTempHumiditySensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
+    zbLuxSensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
+    zbAirQuality.setPowerSource(ZB_POWER_SOURCE_MAINS);
+    zbOccupancySensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
+    zbDBSensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
+    zbRangeExtender.setPowerSource(ZB_POWER_SOURCE_MAINS);
   }
 
   // Set callback function for relays change
@@ -395,10 +590,27 @@ extern "C" void app_main(void) {
         ens160.setOperatingMode(SFE_ENS160_STANDARD);
       } else if (strcmp(config->sensors[i].type, "INMP441") == 0) {
         // Initialize INMP441 sensor
+        // Set up analog input for dB sensor
+        zbDBSensor.addAnalogInput();
+        zbDBSensor.setAnalogInputDescription("Sound Level (dB)");
+        zbDBSensor.setAnalogInputResolution(0.1);
+
         Zigbee.addEndpoint(&zbDBSensor);
+        ESP_LOGI(TAG,
+                 "Initializing INMP441 dB sensor on SCK: %d, WS: %d, "
+                 "SD: %d",
+                 config->sensors[i].sck, config->sensors[i].ws,
+                 config->sensors[i].sd);
       } else if (strcmp(config->sensors[i].type, "HLK-LD2412") == 0) {
         // Initialize HLK-LD2412 sensor
         // ESP_LOGI(TAG, "Initializing HLK-LD2412 presence sensor");
+
+        // Configure binary sensor for occupancy detection
+        zbOccupancySensor.addBinaryInput();
+        zbOccupancySensor.setBinaryInputApplication(
+            BINARY_INPUT_APPLICATION_TYPE_HVAC_OCCUPANCY);
+        zbOccupancySensor.setBinaryInputDescription("Occupancy Sensor");
+
         Zigbee.addEndpoint(&zbOccupancySensor);
 
         // Initialize UART buffers and configuration for LD2412 communication
@@ -437,57 +649,176 @@ extern "C" void app_main(void) {
   for (uint8_t i = 0; i < 4; i++) {
     if (config->switches[i].enabled) {
       // Use the initialized array
-      Zigbee.addEndpoint(&zbContactSwitches[i]);
+      ESP_LOGI(TAG, "Configuring binary sensor %d on pin %d", i,
+               config->switches[i].pin);
+
+      // Configure binary sensor (more compatible than IAS zones)
+      zbBinarySensors[i].setManufacturerAndModel(config->device.manufacturer,
+                                                 config->device.model);
+
+      // Set power source for binary sensors
+      if (strcmp(config->device.power_supply, "battery") == 0) {
+        zbBinarySensors[i].setPowerSource(ZB_POWER_SOURCE_BATTERY);
+      } else {
+        zbBinarySensors[i].setPowerSource(ZB_POWER_SOURCE_MAINS);
+      }
+
+      // Add binary input cluster and set application type
+      zbBinarySensors[i].addBinaryInput();
+      zbBinarySensors[i].setBinaryInputApplication(
+          BINARY_INPUT_APPLICATION_TYPE_SECURITY_INTRUSION_DETECTION);
+      zbBinarySensors[i].setBinaryInputDescription("Contact Switch");
+
+      // Add binary sensor endpoint (more compatible than IAS zones)
+      Zigbee.addEndpoint(&zbBinarySensors[i]);
+
+      pinMode(config->switches[i].pin, INPUT_PULLUP);
+      switchNr++;
     }
   }
+  ESP_LOGI(TAG, "Total enabled contact switches: %d", switchNr);
 
   for (uint8_t i = 0; i < 4; i++) {
     if (config->relays[i].enabled) {
+      zbRelays[i].setManufacturerAndModel(config->device.manufacturer,
+                                          config->device.model);
+      if (strcmp(config->device.power_supply, "battery") == 0) {
+        zbRelays[i].setPowerSource(ZB_POWER_SOURCE_BATTERY);
+      } else {
+        zbRelays[i].setPowerSource(ZB_POWER_SOURCE_MAINS);
+      }
       Zigbee.addEndpoint(&zbRelays[i]);
     }
   }
 
   // When all EPs are registered, start Zigbee.
+  ESP_LOGI(TAG, "Device type: '%s'", config->device.type);
+
+  bool zigbee_started = false;
   if (strcmp(config->device.type, "Router") == 0) {
+    ESP_LOGI(TAG, "Starting Zigbee as Router");
     if (!Zigbee.begin(ZIGBEE_ROUTER)) {
+      ESP_LOGE(TAG, "Zigbee Router failed to start!");
       Serial.println("Zigbee failed to start!");
       Serial.println("Rebooting...");
       ESP.restart();
     }
+    zigbee_started = true;
   } else if (strcmp(config->device.type, "EndDevice") == 0) {
+    ESP_LOGI(TAG, "Starting Zigbee as End Device");
     if (!Zigbee.begin(ZIGBEE_END_DEVICE)) {
+      ESP_LOGE(TAG, "Zigbee End Device failed to start!");
       Serial.println("Zigbee failed to start!");
       Serial.println("Rebooting...");
       ESP.restart();
     }
+    zigbee_started = true;
+  } else {
+    ESP_LOGE(TAG, "Unknown device type '%s'. Expected 'Router' or 'EndDevice'",
+             config->device.type);
+    Serial.printf(
+        "Unknown device type '%s'. Expected 'Router' or 'EndDevice'\r\n",
+        config->device.type);
+    Serial.println("Rebooting...");
+    ESP.restart();
   }
 
-  Serial.println("Connecting to network");
-  while (!Zigbee.connected()) {
-    Serial.print(".");
-    delay(100);
-  }
-  Serial.println();
+  if (zigbee_started) {
+    ESP_LOGI(TAG,
+             "Zigbee started successfully, waiting for network connection...");
+    Serial.println("Connecting to network");
+    uint32_t connection_timeout = 0;
+    while (!Zigbee.connected()) {
+      Serial.print(".");
+      delay(100);
+      connection_timeout++;
 
-  // temporär
-  xTaskCreate(lux_sensor_value_update, "lux_sensor_update", 2048, NULL, 10,
-              NULL);
-  zbLuxSensor.setReporting(1, 0, 1000); // delta = 1000 raw illuminance
-  xTaskCreate(temp_sensor_value_update, "temp_sensor_update", 2048, NULL, 10,
-              NULL);
-  zbTempSensor.setReporting(1, 0, 1); // delta = 0.1°C
-  xTaskCreate(temp_humidity_sensor_value_update, "temp_humidity_sensor_update",
-              2048, NULL, 10, NULL);
-  zbTempHumiditySensor.setReporting(1, 0, 1); // delta = 0.1°C
-  zbAirQuality.setReporting(1, 0, 100);       // delta = 100 ppm eCO2
+      // Add timeout after 5 minutes (3000 * 100ms = 300 seconds)
+      if (connection_timeout > 3000) {
+        ESP_LOGE(TAG, "Zigbee connection timeout after 5 minutes");
+        Serial.println("\nZigbee connection timeout after 5 minutes!");
+        Serial.println("Rebooting...");
+        ESP.restart();
+      }
+    }
+    Serial.println();
+    ESP_LOGI(TAG, "Zigbee network connection established successfully!");
+  }
+
+  // Add stabilization delay after network connection
+  ESP_LOGI(TAG, "Zigbee network connected. Waiting 10 seconds for network "
+                "stabilization...");
+  delay(10000);
+
+  // Create sensor tasks only for enabled sensors based on config
+  ESP_LOGI(TAG, "Starting sensor tasks with staggered initialization...");
+
+  for (uint8_t i = 0; config->sensors[i].type[0] != '\0'; i++) {
+    if (config->sensors[i].enabled) {
+      if (strcmp(config->sensors[i].type, "OPT3004") == 0) {
+        xTaskCreate(lux_sensor_value_update, "lux_sensor_update", 3072, NULL, 8,
+                    NULL);
+        zbLuxSensor.setReporting(5, 0,
+                                 1000); // min=5s, max=0 (disabled), delta=1000
+        ESP_LOGI(TAG, "OPT3004 lux sensor task started");
+        delay(2000); // Stagger task creation
+
+      } else if (strcmp(config->sensors[i].type, "MTS4Z") == 0) {
+        xTaskCreate(temp_sensor_value_update, "temp_sensor_update", 3072, NULL,
+                    8, NULL);
+        zbTempSensor.setReporting(5, 0,
+                                  5); // min=5s, max=0 (disabled), delta=0.5°C
+        ESP_LOGI(TAG, "MTS4Z temperature sensor task started");
+        delay(2000); // Stagger task creation
+
+      } else if (strcmp(config->sensors[i].type, "AHT21") == 0) {
+        xTaskCreate(temp_humidity_sensor_value_update,
+                    "temp_humidity_sensor_update", 3072, NULL, 8, NULL);
+        zbTempHumiditySensor.setReporting(
+            10, 0, 5); // min=10s, max=0 (disabled), delta=0.5°C
+        ESP_LOGI(TAG, "AHT21 temperature/humidity sensor task started");
+        delay(2000); // Stagger task creation
+
+      } else if (strcmp(config->sensors[i].type, "ENS160") == 0) {
+        zbAirQuality.setReporting(
+            30, 0, 100); // min=30s, max=0 (disabled), delta=100 ppm
+        ESP_LOGI(TAG, "ENS160 air quality sensor reporting configured");
+      } else if (strcmp(config->sensors[i].type, "INMP441") == 0) {
+        xTaskCreate(db_sensor_value_update, "db_sensor_update", 8192, NULL, 8,
+                    NULL);
+        ESP_LOGI(TAG, "INMP441 dB sensor task started");
+        delay(2000); // Stagger task creation
+      }
+    }
+  }
 
   // Start LD2412 occupancy sensor task if initialized
   if (ld2412_initialized) {
-    xTaskCreate(occupancy_sensor_value_update, "occupancy_sensor_update", 3072,
-                NULL, 8, NULL);
-    zbOccupancySensor.setOccupancy(false); // Initialize occupancy state
-    zbOccupancySensor.report();            // Report initial state
+    delay(3000); // Additional delay before starting occupancy sensor
+    xTaskCreate(occupancy_sensor_value_update, "occupancy_sensor_update", 4096,
+                NULL, 7, NULL);
+    zbOccupancySensor.setBinaryInput(false); // Initialize occupancy state
+    // Don't report immediately, let the task handle it
     ESP_LOGI(TAG, "LD2412 occupancy sensor task started");
+  }
+
+  // Wait a bit before starting contact switches
+  if (switchNr > 0) {
+    ESP_LOGI(TAG, "=== Binary Sensor Setup ===");
+    ESP_LOGI(TAG, "Found %d enabled binary sensors (contact switches)",
+             switchNr);
+    ESP_LOGI(
+        TAG,
+        "Using binary sensors instead of IAS zones (better compatibility)");
+
+    // Give time for network to stabilize (reduced from 30s)
+    ESP_LOGI(TAG, "Waiting 5 seconds for network stabilization...");
+    delay(5000);
+
+    ESP_LOGI(TAG, "Starting binary sensor monitoring...");
+    xTaskCreate(contact_switches_task, "contact_switches_task", 4096, NULL, 7,
+                NULL);
+    ESP_LOGI(TAG, "Binary sensor monitoring task started");
   }
 
   // Start Zigbee OTA client query, first request is within a minute and the
