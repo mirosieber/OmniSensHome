@@ -33,7 +33,7 @@ void send_command(uint8_t *command_str, uint8_t *command_val, int command_val_le
   frame_data_index += 2;
   intra_frame_data_length += 2;
   // command value bytes
-  if (command_val[0] != '\0') {
+  if (command_val_len > 0) {
     for (int i = 0; i < command_val_len; i++)
     {
       hUart.uart_txBuffer[frame_data_index+i] = command_val[i];
@@ -52,6 +52,22 @@ void send_command(uint8_t *command_str, uint8_t *command_val, int command_val_le
   frame_data_index += 4;
 
   hUart.uart_txPacketSize = frame_data_index;
+
+  // Debug: Log the command being sent
+  ESP_LOGI(TAG, "Sending command: CMD=0x%02X%02X, LEN=%d", command_str[0], command_str[1], command_val_len);
+  char hex_str[100] = "";
+  for (int i = 0; i < frame_data_index && i < 20; i++) {
+    char byte_str[6];
+    sprintf(byte_str, "%02X ", hUart.uart_txBuffer[i]);
+    strcat(hex_str, byte_str);
+  }
+  ESP_LOGI(TAG, "TX: %s", hex_str);
+
+  // Clear any remaining buffer data to prevent interference
+  for (int i = frame_data_index; i < 64; i++) {
+    hUart.uart_txBuffer[i] = 0x00;
+  }
+
   xQueueSendToBack(uartTx_queue, &hUart, portMAX_DELAY);
 }
 
@@ -95,6 +111,12 @@ uint8_t ld2412_parse_target_data_frame(const uint8_t* frame_data, int16_t* movem
   }
 }
 void ld2412_parse_command_ack_frame(const uint8_t* frame_data) {
+  // Debug: Log all command responses to see what we're receiving
+  if (frame_data[7] == 0x01) {
+    ESP_LOGI(TAG, "Command ACK received: [6-7]=0x%02X%02X, [8-9]=0x%02X%02X", 
+             frame_data[6], frame_data[7], frame_data[8], frame_data[9]);
+  }
+
   // Enable engineering mode 
   // Command word: 2 bytes 0x0162
   // Return value: 2-bytes ACK status (0 successful, 1 failed)
@@ -121,6 +143,40 @@ void ld2412_parse_command_ack_frame(const uint8_t* frame_data) {
   // Return value: 2-bytes ACK status (0 successful, 1 failed)
   if (frame_data[6] == 0xA1 && frame_data[7] == 0x01 && frame_data[8] == 0x0 && frame_data[9] == 0x0) {
     ESP_LOGI(TAG, "Successfully Set serial baud rate, please restart the module");
+  }
+
+  // Reboot Module
+  // Command word: 2 bytes 0x01A3
+  // Return value: 2-bytes ACK status (0 successful, 1 failed)
+  if (frame_data[6] == 0xA3 && frame_data[7] == 0x01) {
+    if (frame_data[8] == 0x0 && frame_data[9] == 0x0) {
+      ESP_LOGI(TAG, "Module reboot command acknowledged - module will restart");
+    } else {
+      ESP_LOGW(TAG, "Module reboot command failed (Status: 0x%02X%02X)", frame_data[9], frame_data[8]);
+    }
+  }
+
+  // Disable/Enable Bluetooth (Official command from documentation)
+  // Command word: 2 bytes 0x01A4 
+  // Return value: 2-bytes ACK status (0 successful, 1 failed)
+  // Note: Setting takes effect after module restart
+  if (frame_data[6] == 0xA4 && frame_data[7] == 0x01) {
+    if (frame_data[8] == 0x0 && frame_data[9] == 0x0) {
+      ESP_LOGI(TAG, "Successfully set Bluetooth configuration (restart required)");
+    } else {
+      ESP_LOGW(TAG, "Failed to set Bluetooth configuration (Status: 0x%02X%02X)", frame_data[9], frame_data[8]);
+    }
+  }
+
+  // Legacy Bluetooth disable command (keeping for compatibility)
+  // Command word: 2 bytes 0x01A5
+  // Return value: 2-bytes ACK status (0 successful, 1 failed)
+  if (frame_data[6] == 0xA5 && frame_data[7] == 0x01) {
+    if (frame_data[8] == 0x0 && frame_data[9] == 0x0) {
+      ESP_LOGI(TAG, "Successfully disabled Bluetooth");
+    } else {
+      ESP_LOGW(TAG, "Bluetooth disable not supported by this firmware version (Command: 0xA5, Status: 0x%02X%02X)", frame_data[9], frame_data[8]);
+    }
   }
 }
 
@@ -209,4 +265,98 @@ void restart_module(void) {
   
   control_config_mode(false);
   vTaskDelay(150/portTICK_PERIOD_MS);
+}
+
+/**
+ * @brief Disable Bluetooth functionality of the LD2412 module
+ *
+ * @param void
+ *
+ */
+void disable_bluetooth(void) {
+  // Command word (2 bytes) 0x00A4  
+  // Command value (2 bytes) 0x0000 to disable Bluetooth, 0x0100 to enable Bluetooth
+  // Note: Module needs restart for this setting to take effect
+  uint8_t cmd[2] = {0xA4, 0x00};
+  uint8_t cmd_val[2] = {0x00, 0x00}; // 0x0000 = Turn off Bluetooth (LSB first)
+
+  control_config_mode(true);
+  vTaskDelay(150/portTICK_PERIOD_MS);
+
+  ESP_LOGI(TAG, "Sending disable Bluetooth command (0x00A4 with value 0x0000)");
+  send_command(cmd, cmd_val, 2);
+  vTaskDelay(800/portTICK_PERIOD_MS);  // Wait longer for Bluetooth command response
+  
+  control_config_mode(false);
+  vTaskDelay(200/portTICK_PERIOD_MS);
+  
+  ESP_LOGI(TAG, "Bluetooth disable command sent. Waiting before reboot...");
+  vTaskDelay(1000/portTICK_PERIOD_MS);  // Additional delay between Bluetooth and reboot commands
+  
+  ESP_LOGI(TAG, "Starting module reboot to apply Bluetooth setting...");
+  
+  // Automatically reboot the module to apply Bluetooth setting
+  // Command word: 0x00A3, Command value: none
+  uint8_t reboot_cmd[2] = {0xA3, 0x00};
+  uint8_t reboot_cmd_val[2] = {0x00, 0x00}; // Initialize properly for reboot command
+
+  control_config_mode(true);
+  vTaskDelay(200/portTICK_PERIOD_MS);
+
+  ESP_LOGI(TAG, "Sending module reboot command (0x00A3)");
+  send_command(reboot_cmd, reboot_cmd_val, 0); // No command value for reboot
+  vTaskDelay(500/portTICK_PERIOD_MS);  // Wait longer for reboot ACK before module reboots
+  
+  control_config_mode(false);
+  vTaskDelay(200/portTICK_PERIOD_MS);
+  
+  ESP_LOGI(TAG, "Module reboot command sent. Module will restart automatically.");
+  vTaskDelay(3000/portTICK_PERIOD_MS);  // Give module much more time to reboot completely
+}
+
+/**
+ * @brief Enable Bluetooth functionality of the LD2412 module
+ *
+ * @param void
+ *
+ */
+void enable_bluetooth(void) {
+  // Command word (2 bytes) 0x00A4  
+  // Command value (2 bytes) 0x0000 to disable Bluetooth, 0x0100 to enable Bluetooth
+  // Note: Module needs restart for this setting to take effect
+  uint8_t cmd[2] = {0xA4, 0x00};
+  uint8_t cmd_val[2] = {0x01, 0x00}; // 0x0100 = Turn on Bluetooth (LSB first: 0x01, 0x00)
+
+  control_config_mode(true);
+  vTaskDelay(150/portTICK_PERIOD_MS);
+
+  ESP_LOGI(TAG, "Sending enable Bluetooth command (0x00A4 with value 0x0100)");
+  send_command(cmd, cmd_val, 2);
+  vTaskDelay(800/portTICK_PERIOD_MS);  // Wait longer for Bluetooth command response
+  
+  control_config_mode(false);
+  vTaskDelay(200/portTICK_PERIOD_MS);
+  
+  ESP_LOGI(TAG, "Bluetooth enable command sent. Waiting before reboot...");
+  vTaskDelay(1000/portTICK_PERIOD_MS);  // Additional delay between Bluetooth and reboot commands
+  
+  ESP_LOGI(TAG, "Starting module reboot to apply Bluetooth setting...");
+  
+  // Automatically reboot the module to apply Bluetooth setting
+  // Command word: 0x00A3, Command value: none
+  uint8_t reboot_cmd[2] = {0xA3, 0x00};
+  uint8_t reboot_cmd_val[2] = {0x00, 0x00}; // Initialize properly for reboot command
+
+  control_config_mode(true);
+  vTaskDelay(200/portTICK_PERIOD_MS);
+
+  ESP_LOGI(TAG, "Sending module reboot command (0x00A3)");
+  send_command(reboot_cmd, reboot_cmd_val, 0); // No command value for reboot
+  vTaskDelay(500/portTICK_PERIOD_MS);  // Wait longer for reboot ACK before module reboots
+  
+  control_config_mode(false);
+  vTaskDelay(200/portTICK_PERIOD_MS);
+  
+  ESP_LOGI(TAG, "Module reboot command sent. Module will restart automatically.");
+  vTaskDelay(3000/portTICK_PERIOD_MS);  // Give module much more time to reboot completely
 }

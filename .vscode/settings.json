@@ -31,6 +31,7 @@
     "initializer_list": "cpp",
     "span": "cpp",
     "text_encoding": "cpp",
-    "regex": "cpp"
+    "regex": "cpp",
+    "ld2412.h": "c"
   }
 }

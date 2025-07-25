@@ -38,7 +38,9 @@ ZigbeeRangeExtender zbRangeExtender = ZigbeeRangeExtender(1);
 ZigbeeIlluminanceSensor zbLuxSensor = ZigbeeIlluminanceSensor(2);
 ZigbeeTempSensor zbTempSensor = ZigbeeTempSensor(3);
 ZigbeeTempSensor zbTempHumiditySensor = ZigbeeTempSensor(4);
-ZigbeeCarbonDioxideSensor zbAirQuality = ZigbeeCarbonDioxideSensor(5);
+ZigbeeCarbonDioxideSensor zbeCo2Sensor = ZigbeeCarbonDioxideSensor(5);
+ZigbeeCarbonDioxideSensor zbTVOCSensor =
+    ZigbeeCarbonDioxideSensor(16); // TVOC sensor endpoint
 ZigbeeAnalog zbDBSensor = ZigbeeAnalog(6);
 ZigbeeBinary zbOccupancySensor = ZigbeeBinary(7);
 // Alternative: Use binary sensors instead of IAS contact switches (more
@@ -49,6 +51,8 @@ uint8_t switchNr =
     0; // Variable to keep track of the number of contact switches
 ZigbeeLight zbRelays[4] = {ZigbeeLight(12), ZigbeeLight(13), ZigbeeLight(14),
                            ZigbeeLight(15)};
+ZigbeeDimmableLight zbRgbLight =
+    ZigbeeDimmableLight(17); // RGB LED dimmable light endpoint
 
 MTS4X MTS4Z = MTS4X();
 OPT300x opt3004;
@@ -56,6 +60,12 @@ AHTxx aht21(AHTXX_ADDRESS_X38, AHTXX_I2C_SENSOR::AHT2x_SENSOR);
 SparkFun_ENS160 ens160;
 
 app_config_t *config;
+
+// RGB LED brightness control
+static uint8_t rgb_brightness = 255; // Default full brightness (0-255)
+static uint8_t rgb_red = 0;
+static uint8_t rgb_green = 0;
+static uint8_t rgb_blue = 0;
 
 // LD2412 sensor variables
 static bool ld2412_initialized = false;
@@ -133,6 +143,52 @@ void configureSensor() {
   }
 }
 
+void setRgbLedColor(uint8_t red, uint8_t green, uint8_t blue) {
+  if (config->rgb_led.enabled) {
+    // Store the raw RGB values
+    rgb_red = red;
+    rgb_green = green;
+    rgb_blue = blue;
+
+    // Apply brightness scaling using the level from ZigbeeColorDimmableLight
+    uint8_t scaled_red = (red * rgb_brightness) / 255;
+    uint8_t scaled_green = (green * rgb_brightness) / 255;
+    uint8_t scaled_blue = (blue * rgb_brightness) / 255;
+
+    analogWrite(config->rgb_led.red_pin, scaled_red);
+    analogWrite(config->rgb_led.green_pin, scaled_green);
+    analogWrite(config->rgb_led.blue_pin, scaled_blue);
+  }
+}
+
+void setRgbLedBrightness(uint8_t brightness) {
+  rgb_brightness = brightness;
+  // Reapply current colors with new brightness
+  setRgbLedColor(rgb_red, rgb_green, rgb_blue);
+  ESP_LOGI(TAG, "RGB LED brightness set to %d", brightness);
+}
+
+/********************* RGB LED Zigbee callbacks **************************/
+void onRgbLightChange(bool state, uint8_t level) {
+  // Always store the brightness level
+  rgb_brightness = 150; // level;   //geht nicht
+
+  if (state) {
+    // Light is ON - Set RGB LED with current color and brightness
+    setRgbLedColor(rgb_red, rgb_green, rgb_blue);
+    ESP_LOGI(TAG, "RGB LED state: ON (R:%d, G:%d, B:%d, Level:%d)", rgb_red,
+             rgb_green, rgb_blue, level);
+  } else {
+    // Light is OFF - Turn off all LEDs
+    if (config->rgb_led.enabled) {
+      analogWrite(config->rgb_led.red_pin, 0);
+      analogWrite(config->rgb_led.green_pin, 0);
+      analogWrite(config->rgb_led.blue_pin, 0);
+    }
+    ESP_LOGI(TAG, "RGB LED turned OFF");
+  }
+}
+
 /********************* Relay control functions **************************/
 void setRelay0(bool value) {
   if (config->relays[0].enabled) {
@@ -184,7 +240,7 @@ static void temp_sensor_value_update(void *arg) {
 
     // Validate temperature reading
     if (temperature > -40.0 && temperature < 85.0) {
-      Serial.printf("[Temp Sensor] Temperature: %.2f°C\r\n", temperature);
+      // Serial.printf("[Temp Sensor] Temperature: %.2f°C\r\n", temperature);
       zbTempSensor.setTemperature(temperature);
     } else {
       ESP_LOGW(TAG, "Invalid temperature reading: %.2f°C", temperature);
@@ -211,7 +267,7 @@ static void lux_sensor_value_update(void *arg) {
     float lux = result.lux;
 
     if (result.error == NO_ERROR && lux >= 0) {
-      Serial.printf("[Lux Sensor] Lux: %.2f\r\n", lux);
+      // Serial.printf("[Lux Sensor] Lux: %.2f\r\n", lux);
       if (lux > 0) {
         float raw = 10000.0 * log10(lux);
         zbLuxSensor.setIlluminance((uint16_t)raw);
@@ -226,7 +282,8 @@ static void lux_sensor_value_update(void *arg) {
   }
 }
 
-/************ Temperature and humidity sensor task***************/
+/************ Temperature and humidity and air quality sensor
+ * task***************/
 static void temp_humidity_sensor_value_update(void *arg) {
   // Wait for Zigbee network to be ready
   while (!Zigbee.connected()) {
@@ -248,9 +305,9 @@ static void temp_humidity_sensor_value_update(void *arg) {
     // Validate readings
     if (ahtTemp > -40.0 && ahtTemp < 85.0 && ahtHumidity >= 0.0 &&
         ahtHumidity <= 100.0) {
-      Serial.printf(
-          "[Temp/Humidity Sensor] Temperature: %.2f°C, Humidity: %.2f%%\r\n",
-          ahtTemp, ahtHumidity);
+      // Serial.printf(
+      //     "[Temp/Humidity Sensor] Temperature: %.2f°C, Humidity: %.2f%%\r\n",
+      //     ahtTemp, ahtHumidity);
       zbTempHumiditySensor.setTemperature(ahtTemp);
       zbTempHumiditySensor.setHumidity(ahtHumidity);
 
@@ -262,8 +319,47 @@ static void temp_humidity_sensor_value_update(void *arg) {
 
       // Validate ENS160 readings
       if (eco2 >= 400 && eco2 <= 65000) { // Typical eCO2 range
-        Serial.printf("[ENS160] eCO2: %d ppm, TVOC: %d ppb\r\n", eco2, tvoc);
-        zbAirQuality.setCarbonDioxide(eco2);
+        // Serial.printf("[ENS160] eCO2: %d ppm, TVOC: %d ppb\r\n", eco2, tvoc);
+        zbeCo2Sensor.setCarbonDioxide(eco2);
+        if (config->rgb_led.enabled && zbRgbLight.getLightState()) {
+          // Set RGB LED color and brightness based on eCO2 level - only if
+          // light is currently ON
+          if (eco2 < 600 && tvoc < 65) {
+            // Good air quality - cyan with low brightness
+            rgb_red = 137;
+            rgb_green = 254;
+            rgb_blue = 255;
+          } else if (eco2 < 800 && tvoc < 220) {
+            // Acceptable air quality - light green with medium-low brightness
+            rgb_red = 144;
+            rgb_green = 238;
+            rgb_blue = 144;
+          } else if (eco2 < 1000 && tvoc < 650) {
+            // Moderate air quality - gold with medium brightness
+            rgb_red = 255;
+            rgb_green = 215;
+            rgb_blue = 0;
+          } else if (eco2 < 1500 && tvoc < 2200) {
+            // Poor air quality - light red with high brightness
+            rgb_red = 255;
+            rgb_green = 80;
+            rgb_blue = 80;
+          } else {
+            // Very poor air quality - red with full brightness
+            rgb_red = 255;
+            rgb_green = 0;
+            rgb_blue = 0;
+          }
+          setRgbLedColor(rgb_red, rgb_green, rgb_blue);
+        }
+
+        // Validate TVOC readings (typical range 0-60000 ppb)
+        if (tvoc <= 60000) {
+          zbTVOCSensor.setCarbonDioxide(
+              tvoc); // Using CO2 sensor for TVOC (ppb)
+        } else {
+          ESP_LOGW(TAG, "Invalid TVOC reading: %d ppb", tvoc);
+        }
       } else {
         ESP_LOGW(TAG, "Invalid eCO2 reading: %d ppm", eco2);
       }
@@ -272,7 +368,7 @@ static void temp_humidity_sensor_value_update(void *arg) {
                ahtTemp, ahtHumidity);
     }
 
-    delay(10000); // Increased to 10 seconds for this sensor combination
+    delay(2000); // Increased delay to reduce stack pressure
   }
 }
 
@@ -316,9 +412,10 @@ static void db_sensor_value_update(void *param) {
 
     // Validate dB reading (typical range for INMP441)
     if (db >= 30.0 && db <= 130.0) {
-      Serial.printf("[dB Sensor] Sound level: %.2f dB\r\n", db);
+      // Serial.printf("[dB Sensor] Sound level: %.2f dB\r\n", db);
 
-      // Use the actual dB value directly since we configured it as a dB sensor
+      // Use the actual dB value directly since we configured it as a dB
+      // sensor
       zbDBSensor.setAnalogInput(db);
 
       // Report the analog input value
@@ -389,27 +486,6 @@ static void contact_switches_task(void *arg) {
 
 /*************Presence Detection Task ****************/
 static void occupancy_sensor_value_update(void *arg) {
-  /*
-    pinMode(15, INPUT_PULLUP);
-    for (;;) {
-
-      // Checking PIR sensor for occupancy change
-      static bool occupancy = false;
-      if (digitalRead(15) == HIGH && !occupancy) {
-        // Update occupancy sensor value
-        zbOccupancySensor.setBinaryInput(true);
-        zbOccupancySensor.reportBinaryInput();
-        occupancy = true;
-      } else if (digitalRead(15) == LOW && occupancy) {
-        zbOccupancySensor.setBinaryInput(false);
-        zbOccupancySensor.reportBinaryInput();
-        occupancy = false;
-      }
-      Serial.printf("[Occupancy Sensor] Occupancy: %s\r\n",
-                    occupancy ? "DETECTED" : "CLEAR");
-      delay(1000);
-    }
-  */
 
   const char *TAG = "Occupancy Sensor Task";
   // ESP_LOGI(TAG, "=== LD2412 Occupancy Sensor Task Started ===");
@@ -446,6 +522,10 @@ static void occupancy_sensor_value_update(void *arg) {
         int16_t moving_target = sensor_data.data[1];
         int16_t stationary_target = sensor_data.data[2];
 
+        // Suppress unused variable warnings
+        (void)moving_target;
+        (void)stationary_target;
+
         // Determine occupancy based on target detection
         bool occupancy_detected = false;
 
@@ -456,10 +536,12 @@ static void occupancy_sensor_value_update(void *arg) {
         }
 
         // Log sensor data
-        Serial.printf("[LD2412] Target State: %d, Moving: %d cm, Stationary: "
-                      "%d cm, Occupancy: %s\r\n",
-                      target_state, moving_target, stationary_target,
-                      occupancy_detected ? "DETECTED" : "CLEAR");
+        // Serial.printf("[LD2412] Target State: %d, Moving: %d cm,
+        // Stationary:
+        // "
+        //               "%d cm, Occupancy: %s\r\n",
+        //               target_state, moving_target, stationary_target,
+        //               occupancy_detected ? "DETECTED" : "CLEAR");
 
         // Update Zigbee occupancy sensor
         zbOccupancySensor.setBinaryInput(occupancy_detected);
@@ -467,13 +549,14 @@ static void occupancy_sensor_value_update(void *arg) {
         // Additional analysis for debugging
         if (occupancy_detected) {
           if (target_state == 1) {
-            // ESP_LOGI(TAG, "Moving target detected at %d cm", moving_target);
+            // ESP_LOGI(TAG, "Moving target detected at %d cm",
+            // moving_target);
           } else if (target_state == 2) {
             // ESP_LOGI(TAG, "Stationary target detected at %d cm",
             // stationary_target);
           } else if (target_state == 3) {
-            // ESP_LOGI(TAG, "Both targets detected - Moving: %d cm, Stationary:
-            // %d cm", moving_target, stationary_target);
+            // ESP_LOGI(TAG, "Both targets detected - Moving: %d cm,
+            // Stationary: %d cm", moving_target, stationary_target);
           }
         }
       } else {
@@ -523,7 +606,6 @@ extern "C" void app_main(void) {
   while (!Serial) {
     ; // Wait for Serial to initialize (for USB CDC targets)
   }
-
   // Allocate config on heap to avoid stack overflow
   config = (app_config_t *)malloc(sizeof(app_config_t));
   if (config == NULL) {
@@ -557,30 +639,38 @@ extern "C" void app_main(void) {
                                                config->device.model);
   zbLuxSensor.setManufacturerAndModel(config->device.manufacturer,
                                       config->device.model);
-  zbAirQuality.setManufacturerAndModel(config->device.manufacturer,
+  zbeCo2Sensor.setManufacturerAndModel(config->device.manufacturer,
+                                       config->device.model);
+  zbTVOCSensor.setManufacturerAndModel(config->device.manufacturer,
                                        config->device.model);
   zbOccupancySensor.setManufacturerAndModel(config->device.manufacturer,
                                             config->device.model);
   zbRangeExtender.setManufacturerAndModel(config->device.manufacturer,
                                           config->device.model);
+  zbRgbLight.setManufacturerAndModel(config->device.manufacturer,
+                                     config->device.model);
 
   // Set power source for all endpoints
   if (strcmp(config->device.power_supply, "battery") == 0) {
     zbTempSensor.setPowerSource(ZB_POWER_SOURCE_BATTERY);
     zbTempHumiditySensor.setPowerSource(ZB_POWER_SOURCE_BATTERY);
     zbLuxSensor.setPowerSource(ZB_POWER_SOURCE_BATTERY);
-    zbAirQuality.setPowerSource(ZB_POWER_SOURCE_BATTERY);
+    zbeCo2Sensor.setPowerSource(ZB_POWER_SOURCE_BATTERY);
+    zbTVOCSensor.setPowerSource(ZB_POWER_SOURCE_BATTERY);
     zbOccupancySensor.setPowerSource(ZB_POWER_SOURCE_BATTERY);
     zbDBSensor.setPowerSource(ZB_POWER_SOURCE_BATTERY);
     zbRangeExtender.setPowerSource(ZB_POWER_SOURCE_BATTERY);
+    zbRgbLight.setPowerSource(ZB_POWER_SOURCE_BATTERY);
   } else {
     zbTempSensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
     zbTempHumiditySensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
     zbLuxSensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
-    zbAirQuality.setPowerSource(ZB_POWER_SOURCE_MAINS);
+    zbeCo2Sensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
+    zbTVOCSensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
     zbOccupancySensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
     zbDBSensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
     zbRangeExtender.setPowerSource(ZB_POWER_SOURCE_MAINS);
+    zbRgbLight.setPowerSource(ZB_POWER_SOURCE_MAINS);
   }
 
   // Set callback functions for relays change
@@ -589,6 +679,11 @@ extern "C" void app_main(void) {
   zbRelays[2].onLightChange(setRelay2);
   zbRelays[3].onLightChange(setRelay3);
 
+  // Set callback functions for RGB LED if enabled
+  if (config->rgb_led.enabled) {
+    zbRgbLight.onLightChange(onRgbLightChange);
+    ESP_LOGI(TAG, "RGB LED dimmable light endpoint configured");
+  }
   // Add OTA client to the light bulb
   zbTempSensor.addOTAClient(OTA_UPGRADE_RUNNING_FILE_VERSION,
                             OTA_UPGRADE_DOWNLOADED_FILE_VERSION,
@@ -596,6 +691,12 @@ extern "C" void app_main(void) {
   // Add endpoint to Zigbee Core
   if (strcmp(config->device.type, "Router") == 0) {
     Zigbee.addEndpoint(&zbRangeExtender);
+  }
+
+  // Add RGB LED endpoint if enabled
+  if (config->rgb_led.enabled) {
+    Zigbee.addEndpoint(&zbRgbLight);
+    ESP_LOGI(TAG, "RGB LED dimmable light endpoint added");
   }
 
   for (uint8_t i = 0; config->sensors[i].type[0] != '\0'; i++) {
@@ -621,7 +722,8 @@ extern "C" void app_main(void) {
         aht21.begin(config->i2c.sda, config->i2c.scl);
       } else if (strcmp(config->sensors[i].type, "ENS160") == 0) {
         // Initialize ENS160 sensor
-        Zigbee.addEndpoint(&zbAirQuality);
+        Zigbee.addEndpoint(&zbeCo2Sensor);
+        Zigbee.addEndpoint(&zbTVOCSensor); // Add TVOC endpoint
         ens160.begin(config->sensors[i].i2c_address);
         ens160.setOperatingMode(SFE_ENS160_STANDARD);
       } else if (strcmp(config->sensors[i].type, "INMP441") == 0) {
@@ -666,6 +768,22 @@ extern "C" void app_main(void) {
 
         ESP_LOGI(TAG, "LD2412 UART tasks started");
 
+        // Wait for UART system to stabilize before sending commands
+        delay(1000);
+
+        // Read firmware version first to check module capabilities
+        ESP_LOGI(TAG, "Reading LD2412 firmware version");
+        read_firmware_version();
+        delay(1000);
+
+        // Disable Bluetooth functionality of the LD2412 module
+        // ESP_LOGI(TAG, "Disabling LD2412 Bluetooth");
+        // disable_bluetooth();
+
+        // Enable Bluetooth functionality of the LD2412 module
+        ESP_LOGI(TAG, "Enabling LD2412 Bluetooth");
+        enable_bluetooth();
+
         // Optional: Enable engineering mode for detailed data
         delay(2000); // Allow system to stabilize
         ESP_LOGI(TAG, "Enabling LD2412 engineering mode");
@@ -703,7 +821,8 @@ extern "C" void app_main(void) {
       zbBinarySensors[i].addBinaryInput();
       zbBinarySensors[i].setBinaryInputApplication(
           BINARY_INPUT_APPLICATION_TYPE_SECURITY_INTRUSION_DETECTION);
-      zbBinarySensors[i].setBinaryInputDescription("Contact Switch");
+
+      zbBinarySensors[i].setBinaryInputDescription(config->switches[i].name);
 
       // Add binary sensor endpoint (more compatible than IAS zones)
       Zigbee.addEndpoint(&zbBinarySensors[i]);
@@ -785,6 +904,12 @@ extern "C" void app_main(void) {
     }
     Serial.println();
     ESP_LOGI(TAG, "Zigbee network connection established successfully!");
+
+    // Initialize RGB LED state now that Zigbee is connected
+    if (config->rgb_led.enabled) {
+      zbRgbLight.setLight(false, 0); // Start in OFF state
+      ESP_LOGI(TAG, "RGB LED dimmable light initialized in OFF state");
+    }
   }
 
   // Add stabilization delay after network connection
@@ -815,16 +940,19 @@ extern "C" void app_main(void) {
 
       } else if (strcmp(config->sensors[i].type, "AHT21") == 0) {
         xTaskCreate(temp_humidity_sensor_value_update,
-                    "temp_humidity_sensor_update", 3072, NULL, 8, NULL);
+                    "temp_humidity_sensor_update", 4096, NULL, 8, NULL);
         zbTempHumiditySensor.setReporting(
             10, 0, 5); // min=10s, max=0 (disabled), delta=0.5°C
         ESP_LOGI(TAG, "AHT21 temperature/humidity sensor task started");
         delay(2000); // Stagger task creation
 
       } else if (strcmp(config->sensors[i].type, "ENS160") == 0) {
-        zbAirQuality.setReporting(
+        zbeCo2Sensor.setReporting(
             30, 0, 100); // min=30s, max=0 (disabled), delta=100 ppm
+        zbTVOCSensor.setReporting(
+            30, 0, 50); // min=30s, max=0 (disabled), delta=50 ppb
         ESP_LOGI(TAG, "ENS160 air quality sensor reporting configured");
+        ESP_LOGI(TAG, "ENS160 TVOC sensor reporting configured");
       } else if (strcmp(config->sensors[i].type, "INMP441") == 0) {
         xTaskCreate(db_sensor_value_update, "db_sensor_update", 8192, NULL, 8,
                     NULL);

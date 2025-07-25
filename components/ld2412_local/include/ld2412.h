@@ -67,6 +67,22 @@ void set_baud_rate(uint8_t *command_val);
 void restart_module(void);
 
 /**
+ * @brief Disable Bluetooth functionality of the LD2412 module
+ *
+ * @param void
+ *
+ */
+void disable_bluetooth(void);
+
+/**
+ * @brief Enable Bluetooth functionality of the LD2412 module
+ *
+ * @param void
+ *
+ */
+void enable_bluetooth(void);
+
+/**
  * @brief Parse Target data frame received from Radar and return the target distance
  *
  * @param frame_data The input frame data from which the Target data to be extracted.
