@@ -24,6 +24,7 @@ static const char *TAG = "UART";
 static QueueHandle_t uartRx_queue;
 static QueueHandle_t uartRxStore_queue;
 QueueHandle_t uartTx_queue;
+QueueHandle_t system_queue;
 
 uartHandler_t hUart;
 
@@ -45,8 +46,8 @@ void uart_buffer_init(void) {
 void uart_config(void) {
   const uart_config_t uart_config =
   {
-    // Baud rate must be set to default 115200
-    .baud_rate  = 57600,
+    // Use 115200 baud rate as required
+    .baud_rate  = 115200,
     .data_bits  = UART_DATA_8_BITS,
     .parity     = UART_PARITY_DISABLE,
     .stop_bits  = UART_STOP_BITS_1,
@@ -60,13 +61,19 @@ void uart_config(void) {
   ESP_ERROR_CHECK(uart_driver_install(UART_PORT_NUMBER, RX_BUF_SIZE * 2, TX_BUF_SIZE * 2, 20, &uartRx_queue, 0));
   // Configure UART parameters
   ESP_ERROR_CHECK(uart_param_config(UART_PORT_NUMBER, &uart_config));
-  // Set UART pins
+  // Set UART pins (TX=4, RX=5 as specified)
   ESP_ERROR_CHECK(uart_set_pin(UART_PORT_NUMBER, UART_TXD_PIN, UART_RXD_PIN, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
 
+  // Set RX timeout for better data reception
+  ESP_ERROR_CHECK(uart_set_rx_timeout(UART_PORT_NUMBER, 3));
+  
   uart_buffer_init();
 
   uartRxStore_queue	= xQueueCreate(10, sizeof(uartHandler_t));
   uartTx_queue = xQueueCreate(10, sizeof(uartHandler_t));
+  system_queue = xQueueCreate(10, sizeof(system_packet));
+  
+  // ESP_LOGI(TAG, "UART queues created - uartRxStore_queue: %p, system_queue: %p", uartRxStore_queue, system_queue);
 }
 
 /**
@@ -98,17 +105,28 @@ void uart_reception_task(void *pvParameters) {
 
   system_packet system_buffer = {0};
 
-  system_queue = xQueueCreate(10, sizeof(system_packet));
+  // ESP_LOGI(TAG, "UART reception task started");
+
   for(;;) {
     // Waiting for UART packet to get received.
     if(xQueueReceive(uartRxStore_queue, (void * )&uartHandler, portMAX_DELAY)) {
+      // ESP_LOGI(TAG, "Processing packet of %d bytes", hUart.uart_rxPacketSize);
+      
       // Target Data Header
       if ((hUart.uart_rxBuffer[0] == 0xF4) && (hUart.uart_rxBuffer[1] == 0xF3) && (hUart.uart_rxBuffer[2] == 0xF2) && (hUart.uart_rxBuffer[3] == 0xF1) &&
       // Target Data End
       (hUart.uart_rxBuffer[hUart.uart_rxPacketSize-4] == 0xF8) && (hUart.uart_rxBuffer[hUart.uart_rxPacketSize-3] == 0xF7) && (hUart.uart_rxBuffer[hUart.uart_rxPacketSize-2] == 0xF6) && (hUart.uart_rxBuffer[hUart.uart_rxPacketSize-1] == 0xF5))
       {
+        // ESP_LOGI(TAG, "Valid target frame detected - calling parser");
+        
+        // Log the complete frame for debugging
+        // ESP_LOGI(TAG, "Frame bytes [6-7]: 0x%02X 0x%02X (expect 0x02 0xAA for normal or 0x01 0xAA for eng)", hUart.uart_rxBuffer[6], hUart.uart_rxBuffer[7]);
+        // ESP_LOGI(TAG, "Frame byte [15]: 0x%02X (expect 0x55 for normal mode)", hUart.uart_rxBuffer[15]);
+        if (hUart.uart_rxPacketSize > 46) {
+          // ESP_LOGI(TAG, "Frame bytes [45-46]: 0x%02X 0x%02X (expect 0x55 0x00 for eng mode)", hUart.uart_rxBuffer[45], hUart.uart_rxBuffer[46]);
+        }
+                 
         // Parse target frame data
-        // ESP_LOGI(TAG, "Time Target data received: %lld us", esp_timer_get_time());
         target_type = ld2412_parse_target_data_frame(hUart.uart_rxBuffer, (int16_t*) &moving_target, (int16_t*) &stationary_target);
     	  if(target_type != 100) {
           system_buffer.data[0] = target_type;                // Target state 
@@ -116,7 +134,10 @@ void uart_reception_task(void *pvParameters) {
           system_buffer.data[2] = stationary_target;          // Stationary target 
           
           system_buffer.packet_size = 3;
+          // ESP_LOGI(TAG, "Sending to system_queue: target=%d, moving=%d, stationary=%d", target_type, moving_target, stationary_target);
           xQueueSendToBack(system_queue, &system_buffer, portMAX_DELAY);
+        } else {
+          // ESP_LOGW(TAG, "ld2412_parse_target_data_frame returned 100 (error)");
         }
       }  
       // Command Data Header
@@ -124,10 +145,15 @@ void uart_reception_task(void *pvParameters) {
       // Comamnd Data End
       (hUart.uart_rxBuffer[hUart.uart_rxPacketSize-4] == 0x04) && (hUart.uart_rxBuffer[hUart.uart_rxPacketSize-3] == 0x03) && (hUart.uart_rxBuffer[hUart.uart_rxPacketSize-2] == 0x02) && (hUart.uart_rxBuffer[hUart.uart_rxPacketSize-1] == 0x01))
       {
+        // ESP_LOGI(TAG, "Command frame detected");
         // Parse ACK command frame data
         // ESP_LOGI(TAG, "Time ACK data received: %lld us", esp_timer_get_time());
         ld2412_parse_command_ack_frame(hUart.uart_rxBuffer);
+      } else {
+        // ESP_LOGW(TAG, "Unknown frame type - Last 4 bytes: 0x%02X 0x%02X 0x%02X 0x%02X", hUart.uart_rxBuffer[hUart.uart_rxPacketSize-4], hUart.uart_rxBuffer[hUart.uart_rxPacketSize-3], hUart.uart_rxBuffer[hUart.uart_rxPacketSize-2], hUart.uart_rxBuffer[hUart.uart_rxPacketSize-1]);
       }
+    } else {
+      // ESP_LOGW(TAG, "Failed to receive from uartRxStore_queue");
     }
   }
 }
@@ -145,16 +171,19 @@ void uart_event_task(void *pvParameters) {
     //Waiting for UART event.
     if(xQueueReceive(uartRx_queue, (void * )&event, (TickType_t)portMAX_DELAY)) {
       bzero(dtmp, RX_BUF_SIZE);
-      ESP_LOGI(TAG, "uart[%d] event:", UART_PORT_NUMBER);
+      // ESP_LOGI(TAG, "uart[%d] event:", UART_PORT_NUMBER);
       switch(event.type) {
       //Event of UART receving data
       /*We'd better handler data event fast, there would be much more data events than
       other types of events. If we take too much time on data event, the queue might
       be full.*/
       case UART_DATA:
-        ESP_LOGI(TAG, "[UART DATA]: %d", event.size);
+        // ESP_LOGI(TAG, "[UART DATA]: %d bytes received", event.size);
         uart_read_bytes(UART_PORT_NUMBER, hUart.uart_rxBuffer, event.size, portMAX_DELAY);
-        ESP_LOGI(TAG, "CHECK BYTE 17th: %d", hUart.uart_rxBuffer[16]);
+        
+        // Enhanced debugging: Log first few bytes
+        // ESP_LOGI(TAG, "First 4 bytes: 0x%02X 0x%02X 0x%02X 0x%02X", hUart.uart_rxBuffer[0], hUart.uart_rxBuffer[1], hUart.uart_rxBuffer[2], hUart.uart_rxBuffer[3]);
+        
         hUart.uart_rxPacketSize = event.size;
         hUart.uart_status.flags.rxPacket = 1;
 
@@ -162,7 +191,7 @@ void uart_event_task(void *pvParameters) {
         break;
       //Event of HW FIFO overflow detected
       case UART_FIFO_OVF:
-        ESP_LOGI(TAG, "hw fifo overflow");
+        ESP_LOGW(TAG, "UART FIFO overflow detected - resetting");
         // If fifo overflow happened, you should consider adding flow control for your application.
         // The ISR has already reset the rx FIFO,
         // As an example, we directly flush the rx buffer here in order to read more data.
@@ -171,7 +200,7 @@ void uart_event_task(void *pvParameters) {
         break;
         //Event of UART ring buffer full
       case UART_BUFFER_FULL:
-        ESP_LOGI(TAG, "ring buffer full");
+        ESP_LOGW(TAG, "UART ring buffer full - flushing");
         // If buffer full happened, you should consider encreasing your buffer size
         // As an example, we directly flush the rx buffer here in order to read more data.
         uart_flush_input(UART_PORT_NUMBER);
@@ -179,15 +208,15 @@ void uart_event_task(void *pvParameters) {
         break;
       //Event of UART RX break detected
       case UART_BREAK:
-        ESP_LOGI(TAG, "uart rx break");
+        ESP_LOGW(TAG, "UART RX break detected");
         break;
       //Event of UART parity check error
       case UART_PARITY_ERR:
-        ESP_LOGI(TAG, "uart parity error");
+        ESP_LOGW(TAG, "UART parity error detected");
         break;
       //Event of UART frame error
       case UART_FRAME_ERR:
-        ESP_LOGI(TAG, "uart frame error");
+        ESP_LOGW(TAG, "UART frame error detected");
         break;
 
       // //UART_PATTERN_DET

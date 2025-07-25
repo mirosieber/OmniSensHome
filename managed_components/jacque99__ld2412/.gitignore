@@ -1,9 +1,0 @@
-build
-managed_components
-sdkconfig
-sdkconfig.old
-dependencies.lock
-dist
-Doxyfile
-docs
-.pre-commit-config.yaml

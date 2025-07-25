@@ -17,6 +17,8 @@
 #include "OPT300x.h"
 #include "SparkFun_ENS160.h"
 #include "Wire.h"
+#include "ld2412.h"
+#include "uart_config.h"
 #include <AHTxx.h>
 
 /* Zigbee OTA configuration */
@@ -47,6 +49,12 @@ OPT300x opt3004;
 AHTxx aht21(AHTXX_ADDRESS_X38, AHTXX_I2C_SENSOR::AHT2x_SENSOR);
 SparkFun_ENS160 ens160;
 
+// LD2412 sensor variables
+static bool ld2412_initialized = false;
+
+// External reference to system_queue defined in ld2412_local component
+extern QueueHandle_t system_queue;
+
 void printError(String text, OPT300x_ErrorCode error) {
   Serial.print(text);
   Serial.print(": [ERROR] Code #");
@@ -67,10 +75,10 @@ void printResult(String text, OPT300x_S result) {
 void configureSensor() {
   OPT300x_Config newConfig;
 
-  newConfig.RangeNumber = B1100;
-  newConfig.ConvertionTime = B0;
-  newConfig.Latch = B1;
-  newConfig.ModeOfConversionOperation = B11;
+  newConfig.RangeNumber = 0b1100;
+  newConfig.ConvertionTime = 0b0;
+  newConfig.Latch = 0b1;
+  newConfig.ModeOfConversionOperation = 0b11;
 
   OPT300x_ErrorCode errorConfig = opt3004.writeConfig(newConfig);
   if (errorConfig != NO_ERROR)
@@ -130,7 +138,6 @@ static void temp_sensor_value_update(void *arg) {
 
 /********************* Lux sensor task **************************/
 static void lux_sensor_value_update(void *arg) {
-  const char *TAG = "Lux Task";
   for (;;) {
     OPT300x_S result = opt3004.readResult();
     float lux = result.lux;
@@ -147,7 +154,6 @@ static void lux_sensor_value_update(void *arg) {
 
 /************ Temperature and humidity sensor task***************/
 static void temp_humidity_sensor_value_update(void *arg) {
-  const char *TAG = "Temp/Humidity Task";
   for (;;) {
     float ahtTemp =
         aht21.readTemperature(); // read 6-bytes via I2C, takes 80 milliseconds
@@ -169,6 +175,135 @@ static void temp_humidity_sensor_value_update(void *arg) {
     zbAirQuality.setCarbonDioxide(eco2);
     delay(1000);
   }
+}
+
+/*************Presence Detection Task ****************/
+static void occupancy_sensor_value_update(void *arg) {
+  pinMode(15, INPUT_PULLUP);
+  for (;;) {
+
+    // Checking PIR sensor for occupancy change
+    static bool occupancy = false;
+    if (digitalRead(15) == HIGH && !occupancy) {
+      // Update occupancy sensor value
+      zbOccupancySensor.setOccupancy(true);
+      zbOccupancySensor.report();
+      occupancy = true;
+    } else if (digitalRead(15) == LOW && occupancy) {
+      zbOccupancySensor.setOccupancy(false);
+      zbOccupancySensor.report();
+      occupancy = false;
+    }
+    Serial.printf("[Occupancy Sensor] Occupancy: %s\r\n",
+                  occupancy ? "DETECTED" : "CLEAR");
+    delay(1000);
+  }
+
+  /*
+
+  const char *TAG = "Occupancy Sensor Task";
+  // ESP_LOGI(TAG, "=== LD2412 Occupancy Sensor Task Started ===");
+
+  if (!ld2412_initialized) {
+    // ESP_LOGE(TAG, "LD2412 not initialized, exiting task");
+    vTaskDelete(NULL);
+    return;
+  }
+
+  // Check if system_queue is valid
+  if (system_queue == NULL) {
+    // ESP_LOGE(TAG, "system_queue is NULL, exiting task");
+    vTaskDelete(NULL);
+    return;
+  }
+
+  // ESP_LOGI(TAG, "system_queue is valid, waiting for sensor data...");
+
+  system_packet sensor_data = {};
+  uint32_t no_data_count = 0;
+
+  for (;;) {
+    // Wait for sensor data from LD2412 UART reception task
+    if (xQueueReceive(system_queue, (void *)&sensor_data,
+                      pdMS_TO_TICKS(2000))) {
+      // Reset no-data counter
+      no_data_count = 0;
+      // ESP_LOGI(TAG, "Received sensor data packet");
+
+      // Validate data packet
+      if (sensor_data.packet_size == 3) {
+        uint8_t target_state = sensor_data.data[0];
+        int16_t moving_target = sensor_data.data[1];
+        int16_t stationary_target = sensor_data.data[2];
+
+        // Determine occupancy based on target detection
+        bool occupancy_detected = false;
+
+        // Target states: 0 = No target, 1 = Moving target, 2 = Stationary
+        // target, 3 = Moving + Stationary
+        if (target_state > 0) {
+          occupancy_detected = true;
+        }
+
+        // Log sensor data
+        Serial.printf("[LD2412] Target State: %d, Moving: %d cm, Stationary: "
+                      "%d cm, Occupancy: %s\r\n",
+                      target_state, moving_target, stationary_target,
+                      occupancy_detected ? "DETECTED" : "CLEAR");
+
+        // Update Zigbee occupancy sensor
+        zbOccupancySensor.setOccupancy(occupancy_detected);
+        zbOccupancySensor.report(); // Report occupancy status
+        // Additional analysis for debugging
+        if (occupancy_detected) {
+          if (target_state == 1) {
+            // ESP_LOGI(TAG, "Moving target detected at %d cm", moving_target);
+          } else if (target_state == 2) {
+            // ESP_LOGI(TAG, "Stationary target detected at %d cm",
+            // stationary_target);
+          } else if (target_state == 3) {
+            // ESP_LOGI(TAG, "Both targets detected - Moving: %d cm, Stationary:
+            // %d cm", moving_target, stationary_target);
+          }
+        }
+      } else {
+        // ESP_LOGW(TAG, "Invalid sensor data packet size: %d",
+        // sensor_data.packet_size);
+      }
+    } else {
+      // No data received within timeout
+      no_data_count++;
+
+      if (no_data_count > 5) {
+        // ESP_LOGW(TAG, "No sensor data received for %lu seconds - sensor may
+        // be disconnected. Checking UART status...", no_data_count * 2);
+
+        // Additional debugging: Check UART status
+        size_t uart_buffer_size;
+        uart_get_buffered_data_len(UART_NUM_1, &uart_buffer_size);
+        // ESP_LOGW(TAG, "UART buffer has %d bytes", uart_buffer_size);
+
+        // Clear occupancy if no data for extended period
+        if (no_data_count > 15) { // 30 seconds of no data
+          ESP_LOGW(TAG, "Extended timeout - clearing occupancy");
+          zbOccupancySensor.setOccupancy(false);
+          zbOccupancySensor.report(); // Report occupancy status
+
+          // Try to recover UART communication
+          if (no_data_count > 30) { // 60 seconds, attempt recovery
+            // ESP_LOGE(TAG, "Attempting UART recovery after 60 seconds of no
+            // data");
+            uart_flush_input(UART_NUM_1);
+            uart_flush(UART_NUM_1);
+            no_data_count = 15; // Reset to prevent immediate re-trigger
+          }
+        }
+      }
+    }
+
+    delay(1000); // Small delay to prevent excessive CPU usage
+  }
+    */
 }
 
 static const char *TAG = "main";
@@ -212,6 +347,8 @@ extern "C" void app_main(void) {
 
   zbTempSensor.setManufacturerAndModel(config->device.manufacturer,
                                        config->device.model);
+  zbOccupancySensor.setManufacturerAndModel(config->device.manufacturer,
+                                            config->device.model);
   if (strcmp(config->device.power_supply, "battery") == 0) {
     zbTempSensor.setPowerSource(ZB_POWER_SOURCE_BATTERY);
   } else {
@@ -261,7 +398,34 @@ extern "C" void app_main(void) {
         Zigbee.addEndpoint(&zbDBSensor);
       } else if (strcmp(config->sensors[i].type, "HLK-LD2412") == 0) {
         // Initialize HLK-LD2412 sensor
+        // ESP_LOGI(TAG, "Initializing HLK-LD2412 presence sensor");
         Zigbee.addEndpoint(&zbOccupancySensor);
+
+        // Initialize UART buffers and configuration for LD2412 communication
+        uart_buffer_init();
+        uart_config();
+
+        // The system_queue is created by uart_config(), so just mark as
+        // initialized
+        // ESP_LOGI(TAG, "LD2412 system queue created by uart_config()");
+        ld2412_initialized = true;
+
+        // Start UART tasks for LD2412 communication
+        xTaskCreate(uart_event_task, "uart_event_task", 4096, NULL, 5, NULL);
+        xTaskCreate(uart_transmission_task, "uart_tx_task", 2048, NULL, 4,
+                    NULL);
+        xTaskCreate(uart_reception_task, "uart_rx_task", 6144, NULL, 6, NULL);
+
+        ESP_LOGI(TAG, "LD2412 UART tasks started");
+
+        // Optional: Enable engineering mode for detailed data
+        delay(2000); // Allow system to stabilize
+        ESP_LOGI(TAG, "Enabling LD2412 engineering mode");
+        control_engineering_mode();
+
+        // Wait a bit more to ensure the sensor is ready
+        delay(1000);
+        // ESP_LOGI(TAG, "LD2412 initialization complete");
       } else if (strcmp(config->sensors[i].type, "Bluetooth") == 0) {
         // Initialize Bluetooth sensor
       } else {
@@ -316,6 +480,15 @@ extern "C" void app_main(void) {
               2048, NULL, 10, NULL);
   zbTempHumiditySensor.setReporting(1, 0, 1); // delta = 0.1°C
   zbAirQuality.setReporting(1, 0, 100);       // delta = 100 ppm eCO2
+
+  // Start LD2412 occupancy sensor task if initialized
+  if (ld2412_initialized) {
+    xTaskCreate(occupancy_sensor_value_update, "occupancy_sensor_update", 3072,
+                NULL, 8, NULL);
+    zbOccupancySensor.setOccupancy(false); // Initialize occupancy state
+    zbOccupancySensor.report();            // Report initial state
+    ESP_LOGI(TAG, "LD2412 occupancy sensor task started");
+  }
 
   // Start Zigbee OTA client query, first request is within a minute and the
   // next requests are sent every hour automatically

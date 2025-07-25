@@ -75,13 +75,22 @@ uint8_t ld2412_parse_target_data_frame(const uint8_t* frame_data, int16_t* movem
     // *movement_energy = frame_data[11];
     *static_distance = frame_data[12] + (frame_data[13] << 8);
     // *static_energy = frame_data[14];
+    // ESP_LOGI(TAG, "Normal mode: target=%d, moving=%d, stationary=%d", frame_data[8], *movement_distance, *static_distance);
     return frame_data[8]; // Normal mode
-  } else if (frame_data[6] == 0x01 && frame_data[7] == 0xAA && frame_data[45] == 0x55 && frame_data[46] == 0x00) {
-    // Engineering mode target data
-    ESP_LOGI(TAG, "Engineering mode data length: %d", frame_data[4] + (frame_data[5] << 8));
-    // TO DO Parse Engineering mode target data
+  } else if (frame_data[6] == 0x01 && frame_data[7] == 0xAA) {
+    // Engineering mode target data - remove strict byte [45-46] check as sensor sends different values
+    int16_t data_length = frame_data[4] + (frame_data[5] << 8);
+    // ESP_LOGI(TAG, "Engineering mode data length: %d", data_length);
+    
+    // Parse engineering mode data - typical LD2412 engineering mode format
+    // Bytes 8: target state, 9-10: moving distance, 12-13: stationary distance  
+    *movement_distance = frame_data[9] + (frame_data[10] << 8);
+    *static_distance = frame_data[12] + (frame_data[13] << 8);
+    
+    // ESP_LOGI(TAG, "Engineering mode: target=%d, moving=%d, stationary=%d", frame_data[8], *movement_distance, *static_distance);
     return frame_data[8]; // Engineering mode
   } else {
+    // ESP_LOGW(TAG, "Unknown frame format - bytes [6-7]: 0x%02X 0x%02X", frame_data[6], frame_data[7]);
     return 100; // Return 100 if correct target frame not found
   }
 }
