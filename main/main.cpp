@@ -133,6 +133,39 @@ void configureSensor() {
   }
 }
 
+/********************* Relay control functions **************************/
+void setRelay0(bool value) {
+  if (config->relays[0].enabled) {
+    digitalWrite(config->relays[0].pin, value);
+    ESP_LOGI(TAG, "Relay 0 (%s) set to %s", config->relays[0].name,
+             value ? "ON" : "OFF");
+  }
+}
+
+void setRelay1(bool value) {
+  if (config->relays[1].enabled) {
+    digitalWrite(config->relays[1].pin, value);
+    ESP_LOGI(TAG, "Relay 1 (%s) set to %s", config->relays[1].name,
+             value ? "ON" : "OFF");
+  }
+}
+
+void setRelay2(bool value) {
+  if (config->relays[2].enabled) {
+    digitalWrite(config->relays[2].pin, value);
+    ESP_LOGI(TAG, "Relay 2 (%s) set to %s", config->relays[2].name,
+             value ? "ON" : "OFF");
+  }
+}
+
+void setRelay3(bool value) {
+  if (config->relays[3].enabled) {
+    digitalWrite(config->relays[3].pin, value);
+    ESP_LOGI(TAG, "Relay 3 (%s) set to %s", config->relays[3].name,
+             value ? "ON" : "OFF");
+  }
+}
+
 /************************ Temperature sensor task ****************************/
 static void temp_sensor_value_update(void *arg) {
   // Wait for Zigbee network to be ready
@@ -550,8 +583,11 @@ extern "C" void app_main(void) {
     zbRangeExtender.setPowerSource(ZB_POWER_SOURCE_MAINS);
   }
 
-  // Set callback function for relays change
-  // zbRelays[0].onLightChange(setRelays);
+  // Set callback functions for relays change
+  zbRelays[0].onLightChange(setRelay0);
+  zbRelays[1].onLightChange(setRelay1);
+  zbRelays[2].onLightChange(setRelay2);
+  zbRelays[3].onLightChange(setRelay3);
 
   // Add OTA client to the light bulb
   zbTempSensor.addOTAClient(OTA_UPGRADE_RUNNING_FILE_VERSION,
@@ -680,6 +716,12 @@ extern "C" void app_main(void) {
 
   for (uint8_t i = 0; i < 4; i++) {
     if (config->relays[i].enabled) {
+      // Initialize relay pin as output and set to OFF
+      pinMode(config->relays[i].pin, OUTPUT);
+      digitalWrite(config->relays[i].pin, LOW);
+      ESP_LOGI(TAG, "Relay %d (%s) initialized on pin %d", i,
+               config->relays[i].name, config->relays[i].pin);
+
       zbRelays[i].setManufacturerAndModel(config->device.manufacturer,
                                           config->device.model);
       if (strcmp(config->device.power_supply, "battery") == 0) {
