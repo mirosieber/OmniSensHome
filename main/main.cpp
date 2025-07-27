@@ -738,22 +738,11 @@ void speaker_task(void *arg) {
   ESP_LOGI(TAG, "Speaker task starting...");
   delay(2000); // Allow time for Zigbee to stabilize
 
-  uint8_t playback_mode = 0; // 0 = tone, 1 = wav file
-
   for (;;) {
-    if (playback_mode == 0) {
-      // Play a test tone
-      ESP_LOGI(TAG, "Playing 440Hz tone for 500 milliseconds");
-      speaker.playTone(440, 500);
-      ESP_LOGI(TAG, "Tone finished");
-      playback_mode = 1; // Switch to wav file next time
-    } else {
-      // Try to play a WAV file (if it exists)
-      ESP_LOGI(TAG, "Attempting to play WAV file: horn.wav");
-      speaker.playWavFile("horn.wav");
-      ESP_LOGI(TAG, "WAV playback attempt finished");
-      playback_mode = 0; // Switch back to tone next time
-    }
+    // Try to play a WAV file (if it exists)
+    ESP_LOGI(TAG, "Attempting to play WAV file: bell.wav");
+    speaker.playWavFile("bell.wav");
+    ESP_LOGI(TAG, "WAV playback attempt finished");
 
     ESP_LOGI(TAG, "Waiting 15 seconds before next playback");
     delay(15000); // Wait before next iteration

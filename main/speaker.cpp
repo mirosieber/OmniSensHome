@@ -278,35 +278,119 @@ bool Speaker::readWavHeader(File &file, WavHeader &header) {
 
 // New function for standard C file operations
 bool Speaker::readWavHeaderC(FILE *file, WavHeader &header) {
-  if (fread(&header, sizeof(WavHeader), 1, file) != 1) {
-    Serial.println("Failed to read WAV header with C library");
+  // Reset file position to beginning
+  fseek(file, 0, SEEK_SET);
+
+  // Read the header in parts to better handle variations
+  if (fread(&header.chunkID, 4, 1, file) != 1) {
+    Serial.println("Failed to read RIFF header");
     return false;
   }
+
+  if (fread(&header.chunkSize, 4, 1, file) != 1) {
+    Serial.println("Failed to read chunk size");
+    return false;
+  }
+
+  if (fread(&header.format, 4, 1, file) != 1) {
+    Serial.println("Failed to read WAVE format");
+    return false;
+  }
+
+  // Now we need to find the "fmt " chunk (it might not be immediately after
+  // WAVE)
+  char chunkId[4];
+  uint32_t chunkSize;
+
+  while (fread(chunkId, 4, 1, file) == 1) {
+    if (fread(&chunkSize, 4, 1, file) != 1) {
+      Serial.println("Failed to read chunk size while searching for fmt");
+      return false;
+    }
+
+    if (strncmp(chunkId, "fmt ", 4) == 0) {
+      // Found fmt chunk
+      memcpy(header.subchunk1ID, chunkId, 4);
+      header.subchunk1Size = chunkSize;
+
+      // Read the fmt chunk data
+      if (fread(&header.audioFormat, 2, 1, file) != 1)
+        return false;
+      if (fread(&header.numChannels, 2, 1, file) != 1)
+        return false;
+      if (fread(&header.sampleRate, 4, 1, file) != 1)
+        return false;
+      if (fread(&header.byteRate, 4, 1, file) != 1)
+        return false;
+      if (fread(&header.blockAlign, 2, 1, file) != 1)
+        return false;
+      if (fread(&header.bitsPerSample, 2, 1, file) != 1)
+        return false;
+
+      // Skip any remaining bytes in the fmt chunk
+      if (chunkSize > 16) {
+        fseek(file, chunkSize - 16, SEEK_CUR);
+      }
+      break;
+    } else {
+      // Skip this chunk
+      fseek(file, chunkSize, SEEK_CUR);
+    }
+  }
+
+  // Now find the "data" chunk
+  while (fread(chunkId, 4, 1, file) == 1) {
+    if (fread(&chunkSize, 4, 1, file) != 1) {
+      Serial.println("Failed to read chunk size while searching for data");
+      return false;
+    }
+
+    if (strncmp(chunkId, "data", 4) == 0) {
+      // Found data chunk
+      memcpy(header.subchunk2ID, chunkId, 4);
+      header.subchunk2Size = chunkSize;
+      // File position is now at the start of audio data
+      break;
+    } else {
+      // Skip this chunk
+      fseek(file, chunkSize, SEEK_CUR);
+    }
+  }
+
+  Serial.printf(
+      "WAV Header parsed - Format: %d, Channels: %d, Rate: %lu, Bits: %d\n",
+      header.audioFormat, header.numChannels, (unsigned long)header.sampleRate,
+      header.bitsPerSample);
+
   return true;
 }
 
 bool Speaker::validateWavHeader(const WavHeader &header) {
   // Check RIFF header
   if (strncmp(header.chunkID, "RIFF", 4) != 0) {
-    Serial.println("Invalid WAV file: missing RIFF header");
+    Serial.printf("Invalid WAV file: missing RIFF header. Found: %.4s\n",
+                  header.chunkID);
     return false;
   }
 
   // Check WAVE format
   if (strncmp(header.format, "WAVE", 4) != 0) {
-    Serial.println("Invalid WAV file: not a WAVE file");
+    Serial.printf("Invalid WAV file: not a WAVE file. Found: %.4s\n",
+                  header.format);
     return false;
   }
 
   // Check fmt chunk
   if (strncmp(header.subchunk1ID, "fmt ", 4) != 0) {
-    Serial.println("Invalid WAV file: missing fmt chunk");
+    Serial.printf("Invalid WAV file: missing fmt chunk. Found: %.4s\n",
+                  header.subchunk1ID);
     return false;
   }
 
   // Check data chunk
   if (strncmp(header.subchunk2ID, "data", 4) != 0) {
-    Serial.println("Invalid WAV file: missing data chunk");
+    Serial.printf("Invalid WAV file: missing data chunk. Found: %.4s\n",
+                  header.subchunk2ID);
     return false;
   }
 
@@ -318,13 +402,29 @@ bool Speaker::validateWavHeader(const WavHeader &header) {
   }
 
   // Check bits per sample
-  if (header.bitsPerSample != 16) {
-    Serial.printf("Unsupported bits per sample: %d (only 16-bit supported)\n",
-                  header.bitsPerSample);
+  if (header.bitsPerSample != 16 && header.bitsPerSample != 8) {
+    Serial.printf(
+        "Unsupported bits per sample: %d (only 8-bit and 16-bit supported)\n",
+        header.bitsPerSample);
     return false;
   }
 
-  Serial.printf("WAV file info: %lu Hz, %d channels, %d bits\n",
+  // Check if we have valid channels
+  if (header.numChannels < 1 || header.numChannels > 2) {
+    Serial.printf(
+        "Unsupported number of channels: %d (only mono and stereo supported)\n",
+        header.numChannels);
+    return false;
+  }
+
+  // Check sample rate (reasonable range)
+  if (header.sampleRate < 8000 || header.sampleRate > 192000) {
+    Serial.printf("Unsupported sample rate: %lu Hz\n",
+                  (unsigned long)header.sampleRate);
+    return false;
+  }
+
+  Serial.printf("✓ WAV file validation passed: %lu Hz, %d channels, %d bits\n",
                 (unsigned long)header.sampleRate, header.numChannels,
                 header.bitsPerSample);
   return true;
@@ -356,6 +456,15 @@ void Speaker::convertSampleRate(int16_t *inputBuffer, int inputSamples,
       outputBuffer[i] = (int16_t)(inputBuffer[index1] * (1.0f - fraction) +
                                   inputBuffer[index2] * fraction);
     }
+  }
+}
+
+void Speaker::convert8bitTo16bit(uint8_t *input8bit, int16_t *output16bit,
+                                 int samples) {
+  for (int i = 0; i < samples; i++) {
+    // Convert 8-bit unsigned (0-255) to 16-bit signed (-32768 to 32767)
+    // 8-bit audio typically uses unsigned values with 128 as the center point
+    output16bit[i] = ((int16_t)input8bit[i] - 128) * 256;
   }
 }
 
@@ -407,11 +516,24 @@ void Speaker::playWavFile(const char *filename) {
   const size_t maxBufferSize = 512; // Smaller buffer to reduce memory pressure
   int16_t *readBuffer = nullptr;
   int16_t *outputBuffer = nullptr;
+  uint8_t *raw8bitBuffer = nullptr; // For 8-bit audio data
 
   // Calculate proper buffer sizes based on audio format
   size_t readBufferSize = maxBufferSize;
   if (header.numChannels == 2) {
     readBufferSize = maxBufferSize * 2; // Need space for stereo samples
+  }
+
+  // For 8-bit audio, we need a separate buffer for raw data
+  if (header.bitsPerSample == 8) {
+    size_t raw8bitBufferSize = readBufferSize;
+    raw8bitBuffer = new (std::nothrow) uint8_t[raw8bitBufferSize];
+    if (!raw8bitBuffer) {
+      Serial.println("Failed to allocate memory for 8-bit audio buffer");
+      fclose(wavFile);
+      _isPlaying = false;
+      return;
+    }
   }
 
   // Calculate maximum output buffer size for sample rate conversion
@@ -430,6 +552,7 @@ void Speaker::playWavFile(const char *filename) {
     Serial.println("Failed to allocate memory for WAV playback buffers");
     delete[] readBuffer;
     delete[] outputBuffer;
+    delete[] raw8bitBuffer;
     fclose(wavFile);
     _isPlaying = false;
     return;
@@ -450,10 +573,24 @@ void Speaker::playWavFile(const char *filename) {
       samplesToRead = totalSamples - samplesProcessed;
     }
 
-    size_t samplesRead =
-        fread(readBuffer, sizeof(int16_t), samplesToRead, wavFile);
-    if (samplesRead == 0) {
-      break; // End of file or error
+    size_t samplesRead;
+
+    // Handle different bit depths
+    if (header.bitsPerSample == 8) {
+      // Read 8-bit data and convert to 16-bit
+      samplesRead =
+          fread(raw8bitBuffer, sizeof(uint8_t), samplesToRead, wavFile);
+      if (samplesRead == 0) {
+        break; // End of file or error
+      }
+      // Convert 8-bit to 16-bit
+      convert8bitTo16bit(raw8bitBuffer, readBuffer, samplesRead);
+    } else {
+      // Read 16-bit data directly
+      samplesRead = fread(readBuffer, sizeof(int16_t), samplesToRead, wavFile);
+      if (samplesRead == 0) {
+        break; // End of file or error
+      }
     }
 
     // Convert channels if necessary (stereo to mono)
@@ -508,6 +645,7 @@ void Speaker::playWavFile(const char *filename) {
   // Clean up memory
   delete[] readBuffer;
   delete[] outputBuffer;
+  delete[] raw8bitBuffer; // Clean up 8-bit buffer if allocated
 
   // Clear I2S buffers with silence to ensure complete silence after playback
   // This matches what we do in stopTone() method

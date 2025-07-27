@@ -59,6 +59,8 @@ private:
   void convertSampleRate(int16_t *inputBuffer, int inputSamples,
                          uint32_t inputRate, int16_t *outputBuffer,
                          int &outputSamples, uint32_t outputRate);
+  void convert8bitTo16bit(uint8_t *input8bit, int16_t *output16bit,
+                          int samples);
   bool initializeSPIFFS(); // Helper method for SPIFFS initialization
 };
 
