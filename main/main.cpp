@@ -22,6 +22,7 @@
 #include "SparkFun_ENS160.h"
 #include "Wire.h"
 #include "ld2412.h"
+#include "speaker.h"
 #include "uart_config.h"
 #include <AHTxx.h>
 
@@ -64,6 +65,7 @@ MTS4X MTS4Z = MTS4X();
 OPT300x opt3004;
 AHTxx aht21(AHTXX_ADDRESS_X38, AHTXX_I2C_SENSOR::AHT2x_SENSOR);
 SparkFun_ENS160 ens160;
+Speaker speaker; // Speaker instance
 
 app_config_t *config;
 
@@ -406,7 +408,6 @@ static void temp_humidity_sensor_value_update(void *arg) {
       if (eco2 >= 400 && eco2 <= 65000) { // Typical eCO2 range
         // Serial.printf("[ENS160] eCO2: %d ppm, TVOC: %d ppb\r\n", eco2, tvoc);
         zbeCo2Sensor.setCarbonDioxide(eco2);
-
         // Check if enough time has passed since last LED update (30 seconds)
         unsigned long current_time = millis();
         if (config->rgb_led.enabled && zbRgbLight.getLightState() &&
@@ -726,6 +727,40 @@ static void occupancy_sensor_value_update(void *arg) {
     delay(100); // Small delay to prevent excessive CPU usage
   }
 }
+/******************Speaker Task****************************** */
+
+void speaker_task(void *arg) {
+  // Wait for Zigbee network to be ready
+  while (!Zigbee.connected()) {
+    delay(100);
+  }
+
+  ESP_LOGI(TAG, "Speaker task starting...");
+  delay(2000); // Allow time for Zigbee to stabilize
+
+  uint8_t playback_mode = 0; // 0 = tone, 1 = wav file
+
+  for (;;) {
+    if (playback_mode == 0) {
+      // Play a test tone
+      ESP_LOGI(TAG, "Playing 440Hz tone for 500 milliseconds");
+      speaker.playTone(440, 500);
+      ESP_LOGI(TAG, "Tone finished");
+      playback_mode = 1; // Switch to wav file next time
+    } else {
+      // Try to play a WAV file (if it exists)
+      ESP_LOGI(TAG, "Attempting to play WAV file: horn.wav");
+      speaker.playWavFile("horn.wav");
+      ESP_LOGI(TAG, "WAV playback attempt finished");
+      playback_mode = 0; // Switch back to tone next time
+    }
+
+    ESP_LOGI(TAG, "Waiting 15 seconds before next playback");
+    delay(15000); // Wait before next iteration
+  }
+}
+
+/***************** Main application entry point ****************/
 
 extern "C" void app_main(void) {
   // Initialize Arduino runtime
@@ -928,6 +963,10 @@ extern "C" void app_main(void) {
     }
   }
 
+  if (config->speaker.enabled) {
+    // Initialize speaker endpoint
+  }
+
   // When all EPs are registered, start Zigbee.
   ESP_LOGI(TAG, "Device type: '%s'", config->device.type);
 
@@ -1034,17 +1073,15 @@ extern "C" void app_main(void) {
                     NULL);
         ESP_LOGI(TAG, "INMP441 dB sensor task started");
         delay(2000); // Stagger task creation
+      } else if (strcmp(config->sensors[i].type, "HLK-LD2412") == 0) {
+        xTaskCreate(occupancy_sensor_value_update, "occupancy_sensor_update",
+                    4096, NULL, 7, NULL);
+        zbOccupancySensor.setBinaryInput(false); // Initialize occupancy state
+
+        ESP_LOGI(TAG, "HLK-LD2412 occupancy sensor task started");
+        delay(2000); // Stagger task creation
       }
     }
-  }
-
-  // Start LD2412 occupancy sensor task if initialized
-  if (ld2412_initialized) {
-    xTaskCreate(occupancy_sensor_value_update, "occupancy_sensor_update", 4096,
-                NULL, 7, NULL);
-    zbOccupancySensor.setBinaryInput(false); // Initialize occupancy state
-    // Don't report immediately, let the task handle it
-    ESP_LOGI(TAG, "LD2412 occupancy sensor task started");
   }
 
   // Wait a bit before starting contact switches
@@ -1059,6 +1096,17 @@ extern "C" void app_main(void) {
     xTaskCreate(contact_switches_task, "contact_switches_task", 4096, NULL, 7,
                 NULL);
     ESP_LOGI(TAG, "Binary sensor monitoring task started");
+  }
+
+  if (config->speaker.enabled) {
+    // Initialize speaker endpoint
+    ESP_LOGI(TAG, "Speaker endpoint initialized");
+    speaker.setPins(config->speaker.bclk, config->speaker.lrc,
+                    config->speaker.din);
+    // Only setup I2S if we're actually going to use the speaker
+    speaker.setupI2S();
+    xTaskCreate(speaker_task, "speaker_task", 4096, NULL, 2, NULL);
+    ESP_LOGI(TAG, "Speaker task started");
   }
 
   // Start Zigbee OTA client query, first request is within a minute and the
