@@ -37,7 +37,7 @@ void onIntruderAlertControl(bool alert_state);
 #define OTA_UPGRADE_RUNNING_FILE_VERSION                                       \
   0x1 // Increment this value when the running image is updated
 #define OTA_UPGRADE_DOWNLOADED_FILE_VERSION                                    \
-  0x1 // Increment this value when the downloaded image is updated
+  0x2 // Increment this value when the downloaded image is updated
 #define OTA_UPGRADE_HW_VERSION                                                 \
   0x1 // The hardware version, this can be used to differentiate between
       // different hardware versions
