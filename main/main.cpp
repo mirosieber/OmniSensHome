@@ -28,14 +28,19 @@
 
 static const char *TAG = "main";
 
+// Forward declarations
+void triggerAudioFromExternal();
+void onIntruderAlertControl(bool alert_state);
+
 /* Zigbee OTA configuration */
+// running muss immer eins hinterher hinken
 #define OTA_UPGRADE_RUNNING_FILE_VERSION                                       \
-  0x01010100 // Increment this value when the running image is updated
+  0x1 // Increment this value when the running image is updated
 #define OTA_UPGRADE_DOWNLOADED_FILE_VERSION                                    \
-  0x01010101 // Increment this value when the downloaded image is updated
+  0x1 // Increment this value when the downloaded image is updated
 #define OTA_UPGRADE_HW_VERSION                                                 \
-  0x0101 // The hardware version, this can be used to differentiate between
-         // different hardware versions
+  0x1 // The hardware version, this can be used to differentiate between
+      // different hardware versions
 
 // Jeder Endpoint hat eine eindeutige Nummer (zwischen 1 und 240)
 ZigbeeRangeExtender zbRangeExtender = ZigbeeRangeExtender(1);
@@ -61,6 +66,12 @@ ZigbeeDimmableLight zbRgbLight =
 // Custom LD2412 Bluetooth Control using standard ZigbeeLight (On/Off cluster)
 ZigbeeLight zbLD2412BluetoothControl = ZigbeeLight(18);
 
+// Audio Trigger using standard ZigbeeLight (On/Off cluster) - Endpoint 19
+ZigbeeLight zbAudioTrigger = ZigbeeLight(19);
+
+// Intruder Alert using standard ZigbeeLight (On/Off cluster) - Endpoint 20
+ZigbeeLight zbIntruderAlert = ZigbeeLight(20);
+
 MTS4X MTS4Z = MTS4X();
 OPT300x opt3004;
 AHTxx aht21(AHTXX_ADDRESS_X38, AHTXX_I2C_SENSOR::AHT2x_SENSOR);
@@ -78,6 +89,11 @@ static uint8_t rgb_blue = 0;
 // LD2412 sensor variables
 static bool ld2412_initialized = false;
 static bool ld2412_bluetooth_enabled = true; // Track current Bluetooth state
+
+// Intruder alert variables
+static bool intruder_alert_active = false; // Track intruder alert state
+static bool intruder_playback_active =
+    false; // Track if intruder.wav is currently playing
 
 // LED color update timing control
 static unsigned long last_led_update_time = 0;
@@ -232,6 +248,89 @@ void onLD2412BluetoothControl(bool bluetooth_enable) {
     ESP_LOGI(TAG, "LD2412 Bluetooth state unchanged: %s",
              ld2412_bluetooth_enabled ? "ENABLED" : "DISABLED");
   }
+}
+
+/************* Audio Trigger Control Functions**************/
+void onAudioTriggerControl(bool trigger_state) {
+  ESP_LOGI(TAG, "Audio trigger Zigbee command received: %s",
+           trigger_state ? "ON (TRIGGER)" : "OFF (IGNORE)");
+
+  if (trigger_state) {
+    // Only trigger on ON commands (momentary trigger behavior)
+    ESP_LOGI(TAG, "Executing audio trigger via Zigbee On/Off cluster");
+    triggerAudioFromExternal();
+
+    // Manually turn the switch back OFF after triggering without calling
+    // lightChanged() This prevents recursive callback and implements momentary
+    // trigger behavior
+    bool off_state = false;
+    esp_zb_lock_acquire(portMAX_DELAY);
+    esp_zb_zcl_status_t ret = esp_zb_zcl_set_attribute_val(
+        19, // endpoint 19
+        ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
+        ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, &off_state, false);
+
+    esp_zb_lock_release();
+
+    if (ret == ESP_ZB_ZCL_STATUS_SUCCESS) {
+      ESP_LOGI(TAG,
+               "Audio trigger completed - switch manually reset to OFF state");
+    } else {
+      ESP_LOGW(TAG, "Failed to reset audio trigger switch state: 0x%x", ret);
+    }
+  } else {
+    ESP_LOGI(TAG, "Audio trigger OFF command - no action needed");
+  }
+}
+
+/************* Intruder Alert Control Functions**************/
+void onIntruderAlertControl(bool alert_state) {
+  ESP_LOGI(TAG, "Intruder alert Zigbee command received: %s",
+           alert_state ? "ON (ACTIVATE)" : "OFF (DEACTIVATE)");
+
+  intruder_alert_active = alert_state;
+
+  if (alert_state) {
+    ESP_LOGI(
+        TAG,
+        "Intruder alert ACTIVATED - Starting continuous intruder.wav playback");
+    // The speaker task will handle continuous playback
+  } else {
+    ESP_LOGI(TAG,
+             "Intruder alert DEACTIVATED - Stopping intruder.wav playback");
+    if (intruder_playback_active) {
+      speaker.stopPlayback();
+      intruder_playback_active = false;
+    }
+  }
+}
+
+/************* Audio Trigger Functions **************/
+void triggerAudioPlayback() {
+  if (config->speaker.enabled) {
+    ESP_LOGI(TAG, "Audio trigger activated - Playing WAV file");
+
+    // Play audio file immediately when triggered
+    speaker.playWavFile("bell.wav");
+    ESP_LOGI(TAG, "Audio trigger playback completed");
+  }
+}
+
+// Simple trigger counter for reporting trigger events
+static uint16_t audio_trigger_counter = 0;
+
+// Function to send trigger event (increment counter and report)
+void sendAudioTriggerEvent() {
+  ESP_LOGI(TAG, "Audio trigger event #%d processed", audio_trigger_counter);
+  // Custom cluster handles the trigger directly, no additional reporting needed
+}
+
+// Public function to trigger audio from external sources
+void triggerAudioFromExternal() {
+  ESP_LOGI(TAG, "External trigger request received");
+  audio_trigger_counter++; // Increment trigger counter
+  triggerAudioPlayback();
+  sendAudioTriggerEvent(); // Report the trigger event
 }
 
 /********************* Relay control functions **************************/
@@ -735,17 +834,42 @@ void speaker_task(void *arg) {
     delay(100);
   }
 
-  ESP_LOGI(TAG, "Speaker task starting...");
-  delay(2000); // Allow time for Zigbee to stabilize
+  ESP_LOGI(TAG, "Speaker task ready for audio triggers and intruder alerts...");
+  delay(2000); // Allow time for system to stabilize
 
+  // Monitor for external trigger requests and intruder alerts
   for (;;) {
-    // Try to play a WAV file (if it exists)
-    ESP_LOGI(TAG, "Attempting to play WAV file: bell.wav");
-    speaker.playWavFile("bell.wav");
-    ESP_LOGI(TAG, "WAV playback attempt finished");
+    if (config->speaker.enabled) {
+      // Handle intruder alert continuous playback
+      if (intruder_alert_active && !intruder_playback_active) {
+        ESP_LOGI(TAG, "Starting continuous intruder.wav playback");
+        intruder_playback_active = true;
 
-    ESP_LOGI(TAG, "Waiting 15 seconds before next playback");
-    delay(15000); // Wait before next iteration
+        // Start continuous playback in a loop
+        while (intruder_alert_active) {
+          ESP_LOGI(TAG, "Playing intruder.wav (continuous mode)");
+          speaker.playWavFile("intruder.wav");
+
+          // Small delay between loops if alert is still active
+          if (intruder_alert_active) {
+            delay(500); // Half second pause between repetitions
+          }
+        }
+
+        intruder_playback_active = false;
+        ESP_LOGI(TAG, "Intruder alert playback stopped");
+      }
+
+      // The custom cluster will handle trigger commands automatically
+      // through the audio_trigger_handler function
+
+      // You can also add manual triggers here if needed:
+      // Example: Check for specific conditions to auto-trigger
+      // if (some_condition) {
+      //   triggerAudioFromExternal();
+      // }
+    }
+    delay(100); // Check every 100ms for responsive control
   }
 }
 
@@ -805,6 +929,10 @@ extern "C" void app_main(void) {
                                      config->device.model);
   zbLD2412BluetoothControl.setManufacturerAndModel(config->device.manufacturer,
                                                    config->device.model);
+  zbAudioTrigger.setManufacturerAndModel(config->device.manufacturer,
+                                         config->device.model);
+  zbIntruderAlert.setManufacturerAndModel(config->device.manufacturer,
+                                          config->device.model);
 
   // Set power source for all endpoints
   if (strcmp(config->device.power_supply, "battery") == 0) {
@@ -818,6 +946,8 @@ extern "C" void app_main(void) {
     zbRangeExtender.setPowerSource(ZB_POWER_SOURCE_BATTERY);
     zbRgbLight.setPowerSource(ZB_POWER_SOURCE_BATTERY);
     zbLD2412BluetoothControl.setPowerSource(ZB_POWER_SOURCE_BATTERY);
+    zbAudioTrigger.setPowerSource(ZB_POWER_SOURCE_BATTERY);
+    zbIntruderAlert.setPowerSource(ZB_POWER_SOURCE_BATTERY);
   } else {
     zbTempSensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
     zbTempHumiditySensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
@@ -829,6 +959,8 @@ extern "C" void app_main(void) {
     zbRangeExtender.setPowerSource(ZB_POWER_SOURCE_MAINS);
     zbRgbLight.setPowerSource(ZB_POWER_SOURCE_MAINS);
     zbLD2412BluetoothControl.setPowerSource(ZB_POWER_SOURCE_MAINS);
+    zbAudioTrigger.setPowerSource(ZB_POWER_SOURCE_MAINS);
+    zbIntruderAlert.setPowerSource(ZB_POWER_SOURCE_MAINS);
   }
 
   // Set callback functions for relays change
@@ -839,6 +971,12 @@ extern "C" void app_main(void) {
 
   // Set callback function for LD2412 Bluetooth control
   zbLD2412BluetoothControl.onLightChange(onLD2412BluetoothControl);
+
+  // Set callback function for audio trigger control
+  zbAudioTrigger.onLightChange(onAudioTriggerControl);
+
+  // Set callback function for intruder alert control
+  zbIntruderAlert.onLightChange(onIntruderAlertControl);
 
   // Add OTA client to the temperature sensor endpoint since this is the only
   // one that is always awalable
@@ -953,7 +1091,20 @@ extern "C" void app_main(void) {
   }
 
   if (config->speaker.enabled) {
-    // Initialize speaker endpoint
+    // Add audio trigger endpoint using standard On/Off cluster (endpoint 19)
+    ESP_LOGI(TAG, "Adding audio trigger endpoint for WAV file playbook");
+    // Note: Initial state will be set after Zigbee connection is established
+    Zigbee.addEndpoint(&zbAudioTrigger);
+    ESP_LOGI(TAG, "Audio trigger endpoint (Endpoint: 19) added - use On/Off "
+                  "commands to trigger audio");
+
+    // Add intruder alert endpoint using standard On/Off cluster (endpoint 20)
+    ESP_LOGI(
+        TAG,
+        "Adding intruder alert endpoint for continuous intruder.wav playback");
+    Zigbee.addEndpoint(&zbIntruderAlert);
+    ESP_LOGI(TAG, "Intruder alert endpoint (Endpoint: 20) added - use On/Off "
+                  "commands to control continuous intruder.wav playback");
   }
 
   // When all EPs are registered, start Zigbee.
@@ -1013,6 +1164,15 @@ extern "C" void app_main(void) {
     if (config->rgb_led.enabled) {
       zbRgbLight.setLight(true, 100); // Start in ON state
       ESP_LOGI(TAG, "RGB LED dimmable light initialized in on state");
+    }
+
+    // Initialize audio trigger state now that Zigbee is connected
+    if (config->speaker.enabled) {
+      zbAudioTrigger.setLight(false); // Start in OFF state
+      ESP_LOGI(TAG, "Audio trigger endpoint initialized in OFF state");
+
+      zbIntruderAlert.setLight(false); // Start in OFF state
+      ESP_LOGI(TAG, "Intruder alert endpoint initialized in OFF state");
     }
   }
 
