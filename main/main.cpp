@@ -88,7 +88,8 @@ static uint8_t rgb_blue = 0;
 
 // LD2412 sensor variables
 static bool ld2412_initialized = false;
-static bool ld2412_bluetooth_enabled = true; // Track current Bluetooth state
+static bool ld2412_bluetooth_enabled =
+    false; // Track current Bluetooth state - default OFF
 
 // Intruder alert variables
 static bool intruder_alert_active = false; // Track intruder alert state
@@ -375,7 +376,7 @@ static void temp_sensor_value_update(void *arg) {
   MTS4Z.begin(config->i2c.sda, config->i2c.scl, MEASURE_SINGLE);
   delay(10);
   // frequenz hier egal, da single mode aktiv
-  MTS4Z.setConfig(MPS_1Hz, AVG_32, true);
+  MTS4Z.setConfig(MPS_1Hz, AVG_32, false);
 
   // Additional stabilization delay
   delay(5000);
@@ -709,6 +710,17 @@ static void occupancy_sensor_value_update(void *arg) {
   delay(1000);
   ESP_LOGI(TAG, "Enabling LD2412 engineering mode");
   control_engineering_mode();
+
+  // Disable Bluetooth by default on startup to match the OFF state
+  ESP_LOGI(TAG, "Disabling LD2412 Bluetooth on startup (default state)");
+  disable_bluetooth();
+  delay(500); // Allow time for command to process
+
+  // Now that LD2412 is initialized, set the Zigbee endpoint state
+  ESP_LOGI(TAG, "Setting LD2412 Bluetooth control endpoint to OFF state "
+                "(Bluetooth disabled)");
+  zbLD2412BluetoothControl.setLight(
+      false); // Start in OFF state (Bluetooth disabled)
 
   // Wait a bit more to ensure the sensor is ready
   delay(1000);
@@ -1174,6 +1186,9 @@ extern "C" void app_main(void) {
       zbIntruderAlert.setLight(false); // Start in OFF state
       ESP_LOGI(TAG, "Intruder alert endpoint initialized in OFF state");
     }
+
+    // Note: LD2412 Bluetooth control initialization will happen later
+    // in the occupancy_sensor_value_update task after LD2412 is initialized
   }
 
   // Add stabilization delay after network connection
