@@ -892,9 +892,6 @@ extern "C" void app_main(void) {
   initArduino();
   // Setup serial communication
   Serial.begin(115200);
-  while (!Serial) {
-    ; // Wait for Serial to initialize (for USB CDC targets)
-  }
   // Allocate config on heap to avoid stack overflow
   config = (app_config_t *)malloc(sizeof(app_config_t));
   if (config == NULL) {
