@@ -72,6 +72,9 @@ ZigbeeLight zbAudioTrigger = ZigbeeLight(19);
 // Intruder Alert using standard ZigbeeLight (On/Off cluster) - Endpoint 20
 ZigbeeLight zbIntruderAlert = ZigbeeLight(20);
 
+// Intruder Detected binary sensor to report status to coordinator - Endpoint 21
+ZigbeeBinary zbIntruderDetected = ZigbeeBinary(21);
+
 MTS4X MTS4Z = MTS4X();
 OPT300x opt3004;
 AHTxx aht21(AHTXX_ADDRESS_X38, AHTXX_I2C_SENSOR::AHT2x_SENSOR);
@@ -93,6 +96,8 @@ static bool ld2412_bluetooth_enabled =
 
 // Intruder alert variables
 static bool intruder_alert_active = false; // Track intruder alert state
+static bool intruder_alert_triggered =
+    false; // Track if intruder alert has been triggered
 static bool intruder_playback_active =
     false; // Track if intruder.wav is currently playing
 
@@ -290,20 +295,25 @@ void onIntruderAlertControl(bool alert_state) {
            alert_state ? "ON (ACTIVATE)" : "OFF (DEACTIVATE)");
 
   intruder_alert_active = alert_state;
-
-  if (alert_state) {
-    ESP_LOGI(
-        TAG,
-        "Intruder alert ACTIVATED - Starting continuous intruder.wav playback");
-    // The speaker task will handle continuous playback
-  } else {
-    ESP_LOGI(TAG,
-             "Intruder alert DEACTIVATED - Stopping intruder.wav playback");
-    if (intruder_playback_active) {
-      speaker.stopPlayback();
-      intruder_playback_active = false;
-    }
+  if (!alert_state && intruder_alert_triggered) {
+    intruder_alert_triggered = false; // Reset alert state
+    // Report status to coordinator via ZigbeeBinaryInput
+    ESP_LOGI(TAG, "Intruder DETECTED - Reporting TRUE to coordinator");
+    zbIntruderDetected.setBinaryInput(false);
+    // zbIntruderDetected.reportBinaryInput();
   }
+}
+
+/************* Intruder Detection Functions**************/
+void triggerIntruderDetected() {
+  if (!intruder_alert_active) {
+    return; // Ignore if intruder alert is not active
+  }
+  intruder_alert_triggered = true;
+  // Report status to coordinator via ZigbeeBinaryInput
+  ESP_LOGI(TAG, "Intruder DETECTED - Reporting TRUE to coordinator");
+  zbIntruderDetected.setBinaryInput(true);
+  // zbIntruderDetected.reportBinaryInput();
 }
 
 /************* Audio Trigger Functions **************/
@@ -667,6 +677,15 @@ static void contact_switches_task(void *arg) {
           }
 
           contact_states[i] = current_pin_state;
+          if (current_pin_state) {
+            ESP_LOGI(TAG,
+                     "Binary sensor %d ON - triggering intruder detection if "
+                     "activated",
+                     i);
+            // triggerIntruderDetected(); // Trigger intruder detection if
+            // sensor
+            //  is ON
+          }
         }
       }
     }
@@ -777,6 +796,10 @@ static void occupancy_sensor_value_update(void *arg) {
         if (occupancy_detected != previous_occupancy_state) {
           zbOccupancySensor.setBinaryInput(occupancy_detected);
           zbOccupancySensor.reportBinaryInput(); // Report occupancy status
+          if (occupancy_detected) {
+            ESP_LOGI(TAG, "Occupancy sensor detected intruder! if activated");
+            triggerIntruderDetected();
+          }
           previous_occupancy_state =
               occupancy_detected; // Update previous state
 
@@ -853,17 +876,17 @@ void speaker_task(void *arg) {
   for (;;) {
     if (config->speaker.enabled) {
       // Handle intruder alert continuous playback
-      if (intruder_alert_active && !intruder_playback_active) {
+      if (intruder_alert_triggered && !intruder_playback_active) {
         ESP_LOGI(TAG, "Starting continuous intruder.wav playback");
         intruder_playback_active = true;
 
         // Start continuous playback in a loop
-        while (intruder_alert_active) {
+        while (intruder_alert_triggered) {
           ESP_LOGI(TAG, "Playing intruder.wav (continuous mode)");
           speaker.playWavFile("intruder.wav");
 
           // Small delay between loops if alert is still active
-          if (intruder_alert_active) {
+          if (intruder_alert_triggered) {
             delay(500); // Half second pause between repetitions
           }
         }
@@ -871,15 +894,6 @@ void speaker_task(void *arg) {
         intruder_playback_active = false;
         ESP_LOGI(TAG, "Intruder alert playback stopped");
       }
-
-      // The custom cluster will handle trigger commands automatically
-      // through the audio_trigger_handler function
-
-      // You can also add manual triggers here if needed:
-      // Example: Check for specific conditions to auto-trigger
-      // if (some_condition) {
-      //   triggerAudioFromExternal();
-      // }
     }
     delay(100); // Check every 100ms for responsive control
   }
@@ -942,6 +956,8 @@ extern "C" void app_main(void) {
                                          config->device.model);
   zbIntruderAlert.setManufacturerAndModel(config->device.manufacturer,
                                           config->device.model);
+  zbIntruderDetected.setManufacturerAndModel(config->device.manufacturer,
+                                             config->device.model);
 
   // Set power source for all endpoints
   if (strcmp(config->device.power_supply, "battery") == 0) {
@@ -957,6 +973,7 @@ extern "C" void app_main(void) {
     zbLD2412BluetoothControl.setPowerSource(ZB_POWER_SOURCE_BATTERY);
     zbAudioTrigger.setPowerSource(ZB_POWER_SOURCE_BATTERY);
     zbIntruderAlert.setPowerSource(ZB_POWER_SOURCE_BATTERY);
+    zbIntruderDetected.setPowerSource(ZB_POWER_SOURCE_BATTERY);
   } else {
     zbTempSensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
     zbTempHumiditySensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
@@ -970,6 +987,7 @@ extern "C" void app_main(void) {
     zbLD2412BluetoothControl.setPowerSource(ZB_POWER_SOURCE_MAINS);
     zbAudioTrigger.setPowerSource(ZB_POWER_SOURCE_MAINS);
     zbIntruderAlert.setPowerSource(ZB_POWER_SOURCE_MAINS);
+    zbIntruderDetected.setPowerSource(ZB_POWER_SOURCE_MAINS);
   }
 
   // Set callback functions for relays change
@@ -1003,7 +1021,7 @@ extern "C" void app_main(void) {
     Zigbee.addEndpoint(&zbRgbLight);
     ESP_LOGI(TAG, "RGB LED dimmable light endpoint added");
   }
-
+  bool occupancy_sensor_enabled = false;
   for (uint8_t i = 0; config->sensors[i].type[0] != '\0'; i++) {
     if (config->sensors[i].enabled) {
       if (strcmp(config->sensors[i].type, "OPT3004") == 0) {
@@ -1039,6 +1057,7 @@ extern "C" void app_main(void) {
         Zigbee.addEndpoint(&zbOccupancySensor);
         // Add LD2412 Bluetooth control endpoint (using standard On/Off cluster)
         Zigbee.addEndpoint(&zbLD2412BluetoothControl);
+        occupancy_sensor_enabled = true;
       } else if (strcmp(config->sensors[i].type, "Bluetooth") == 0) {
         // Initialize Bluetooth sensor ToDo für spätere Version
       } else {
@@ -1047,8 +1066,10 @@ extern "C" void app_main(void) {
       }
     }
   }
+  bool switch_enabled = false;
   for (uint8_t i = 0; i < 4; i++) {
     if (config->switches[i].enabled) {
+      switch_enabled = true;
       // Use the initialized array
       ESP_LOGI(TAG, "Configuring binary sensor %d on pin %d", i,
                config->switches[i].pin);
@@ -1108,12 +1129,31 @@ extern "C" void app_main(void) {
                   "commands to trigger audio");
 
     // Add intruder alert endpoint using standard On/Off cluster (endpoint 20)
-    ESP_LOGI(
-        TAG,
-        "Adding intruder alert endpoint for continuous intruder.wav playback");
+    ESP_LOGI(TAG, "Adding intruder alert endpoint");
     Zigbee.addEndpoint(&zbIntruderAlert);
-    ESP_LOGI(TAG, "Intruder alert endpoint (Endpoint: 20) added - use On/Off "
-                  "commands to control continuous intruder.wav playback");
+  }
+
+  // Add intruder detected endpoint only if occupancy sensor or switches are
+  // enabled
+  if (occupancy_sensor_enabled || switch_enabled) {
+    ESP_LOGI(TAG,
+             "Adding intruder detected binary sensor endpoint (occupancy: %s, "
+             "switches: %s)",
+             occupancy_sensor_enabled ? "enabled" : "disabled",
+             switch_enabled ? "enabled" : "disabled");
+
+    // Configure binary sensor for intruder detection
+    zbIntruderDetected.addBinaryInput();
+    zbIntruderDetected.setBinaryInputApplication(
+        BINARY_INPUT_APPLICATION_TYPE_SECURITY_INTRUSION_DETECTION);
+    zbIntruderDetected.setBinaryInputDescription("Intruder");
+
+    Zigbee.addEndpoint(&zbIntruderDetected);
+    ESP_LOGI(TAG,
+             "Intruder detected binary sensor endpoint (Endpoint: 21) added");
+  } else {
+    ESP_LOGI(TAG, "Intruder detected endpoint not added - no occupancy sensor "
+                  "or switches enabled");
   }
 
   // When all EPs are registered, start Zigbee.
@@ -1182,6 +1222,15 @@ extern "C" void app_main(void) {
 
       zbIntruderAlert.setLight(false); // Start in OFF state
       ESP_LOGI(TAG, "Intruder alert endpoint initialized in OFF state");
+    }
+
+    ESP_LOGI(TAG, "Intruder detected binary sensor endpoint initialized in "
+                  "FALSE state");
+    // Initialize intruder detected endpoint only if it was added
+    if (occupancy_sensor_enabled || switch_enabled) {
+      // Initialize binary sensor state to FALSE (no intruder detected)
+      zbIntruderDetected.setBinaryInput(false);
+      // zbIntruderDetected.reportBinaryInput();
     }
 
     // Note: LD2412 Bluetooth control initialization will happen later
