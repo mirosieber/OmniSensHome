@@ -51,7 +51,7 @@ ZigbeeCarbonDioxideSensor zbeCo2Sensor = ZigbeeCarbonDioxideSensor(5);
 ZigbeeCarbonDioxideSensor zbTVOCSensor =
     ZigbeeCarbonDioxideSensor(16); // TVOC sensor endpoint
 ZigbeeAnalog zbDBSensor = ZigbeeAnalog(6);
-ZigbeeBinary zbOccupancySensor = ZigbeeBinary(7);
+ZigbeeAnalog zbOccupancySensor = ZigbeeAnalog(7);
 // Alternative: Use binary sensors instead of IAS contact switches (more
 // compatible)
 ZigbeeBinary zbBinarySensors[4] = {ZigbeeBinary(8), ZigbeeBinary(9),
@@ -756,6 +756,8 @@ static void occupancy_sensor_value_update(void *arg) {
   system_packet sensor_data = {};
   uint32_t no_data_count = 0;
   bool previous_occupancy_state = false; // Track previous occupancy state
+  uint8_t previous_target_state =
+      0; // Track previous target state for reporting
 
   for (;;) {
     // Wait for sensor data from LD2412 UART reception task
@@ -792,20 +794,25 @@ static void occupancy_sensor_value_update(void *arg) {
         //               target_state, moving_target, stationary_target,
         //               occupancy_detected ? "DETECTED" : "CLEAR");
 
-        // Update Zigbee occupancy sensor only if state changed
-        if (occupancy_detected != previous_occupancy_state) {
-          zbOccupancySensor.setBinaryInput(occupancy_detected);
-          zbOccupancySensor.reportBinaryInput(); // Report occupancy status
-          if (occupancy_detected) {
-            ESP_LOGI(TAG, "Occupancy sensor detected intruder! if activated");
-            triggerIntruderDetected();
-          }
-          previous_occupancy_state =
-              occupancy_detected; // Update previous state
+        // Update Zigbee occupancy sensor to report target state directly
+        // Only report if target state has changed
+        if (target_state != previous_target_state) {
+          zbOccupancySensor.setAnalogInput(target_state);
+          previous_target_state = target_state; // Update previous target state
 
-          ESP_LOGI(TAG, "Occupancy state changed to: %s",
-                   occupancy_detected ? "DETECTED" : "CLEAR");
+          ESP_LOGI(TAG,
+                   "Target state changed: %d (0=None, 1=Moving, 2=Stationary, "
+                   "3=Both)",
+                   target_state);
         }
+
+        // Only trigger intruder detection if target is detected
+        if (target_state > 0 && !previous_occupancy_state) {
+          ESP_LOGI(TAG, "Occupancy sensor detected intruder! if activated");
+          triggerIntruderDetected();
+        }
+
+        previous_occupancy_state = occupancy_detected; // Update previous state
         // Additional analysis for debugging
         if (occupancy_detected) {
           if (target_state == 1) {
@@ -838,12 +845,13 @@ static void occupancy_sensor_value_update(void *arg) {
 
         // Clear occupancy if no data for extended period
         if (no_data_count > 15) { // 30 seconds of no data
-          // Only clear and report if occupancy was previously detected
-          if (previous_occupancy_state) {
+          // Only clear and report if occupancy was previously detected and
+          // target state wasn't already 0
+          if (previous_occupancy_state && previous_target_state != 0) {
             ESP_LOGW(TAG, "Extended timeout - clearing occupancy");
-            zbOccupancySensor.setBinaryInput(false);
-            zbOccupancySensor.reportBinaryInput(); // Report occupancy status
-            previous_occupancy_state = false;      // Update previous state
+            zbOccupancySensor.setAnalogInput(0); // No target detected
+            previous_target_state = 0;           // Update previous target state
+            previous_occupancy_state = false;    // Update previous state
           }
 
           // Try to recover UART communication
@@ -1049,11 +1057,10 @@ extern "C" void app_main(void) {
         Zigbee.addEndpoint(&zbDBSensor);
       } else if (strcmp(config->sensors[i].type, "HLK-LD2412") == 0) {
         // Initialize HLK-LD2412 sensor
-        // Configure binary sensor for occupancy detection
-        zbOccupancySensor.addBinaryInput();
-        zbOccupancySensor.setBinaryInputApplication(
-            BINARY_INPUT_APPLICATION_TYPE_HVAC_OCCUPANCY);
-        zbOccupancySensor.setBinaryInputDescription("Occupancy Sensor");
+        // Configure analog input for target state reporting (0-3)
+        zbOccupancySensor.addAnalogInput();
+        zbOccupancySensor.setAnalogInputDescription("Target State");
+        zbOccupancySensor.setAnalogInputResolution(1.0); // Integer values 0-3
         Zigbee.addEndpoint(&zbOccupancySensor);
         // Add LD2412 Bluetooth control endpoint (using standard On/Off cluster)
         Zigbee.addEndpoint(&zbLD2412BluetoothControl);
@@ -1286,7 +1293,11 @@ extern "C" void app_main(void) {
       } else if (strcmp(config->sensors[i].type, "HLK-LD2412") == 0) {
         xTaskCreate(occupancy_sensor_value_update, "occupancy_sensor_update",
                     4096, NULL, 7, NULL);
-        zbOccupancySensor.setBinaryInput(false); // Initialize occupancy state
+        zbOccupancySensor.setAnalogInput(
+            0); // Initialize target state to 0 (no target)
+        // Set up reporting parameters after Zigbee is stable
+        zbOccupancySensor.setAnalogInputReporting(
+            5, 30, 1); // min=5s, max=30s, delta=1
 
         ESP_LOGI(TAG, "HLK-LD2412 occupancy sensor task started");
         delay(2000); // Stagger task creation
