@@ -302,7 +302,7 @@ void onIntruderAlertControl(bool alert_state) {
     // Report status to coordinator via ZigbeeBinaryInput
     ESP_LOGI(TAG, "Intruder DETECTED - Reporting TRUE to coordinator");
     zbIntruderDetected.setBinaryInput(false);
-    // zbIntruderDetected.reportBinaryInput();
+    zbIntruderDetected.reportBinaryInput();
   }
 }
 
@@ -315,7 +315,7 @@ void triggerIntruderDetected() {
   // Report status to coordinator via ZigbeeBinaryInput
   ESP_LOGI(TAG, "Intruder DETECTED - Reporting TRUE to coordinator");
   zbIntruderDetected.setBinaryInput(true);
-  // zbIntruderDetected.reportBinaryInput();
+  zbIntruderDetected.reportBinaryInput();
 }
 
 /************* Audio Trigger Functions **************/
@@ -680,13 +680,13 @@ static void contact_switches_task(void *arg) {
 
           contact_states[i] = current_pin_state;
           if (current_pin_state) {
-            ESP_LOGI(TAG,
-                     "Binary sensor %d ON - triggering intruder detection if "
-                     "activated",
-                     i);
-            // triggerIntruderDetected(); // Trigger intruder detection if
-            // sensor
-            //  is ON
+            ESP_LOGI(
+                TAG,
+                "Binary sensor %d ON - triggering intruder detection if sensor "
+                "is activated",
+                i);
+            triggerIntruderDetected(); // Trigger intruder detection if sensor
+                                       // is ON
           }
         }
       }
@@ -1246,10 +1246,8 @@ extern "C" void app_main(void) {
     if (occupancy_sensor_enabled || switch_enabled) {
 
       // Initialize binary sensor state to FALSE (no intruder detecte)
-      esp_zb_lock_acquire(portMAX_DELAY);
-      // zbIntruderDetected.setBinaryInput(false);
-      //  zbIntruderDetected.reportBinaryInput();
-      esp_zb_lock_release();
+      zbIntruderDetected.setBinaryInput(false);
+      zbIntruderDetected.reportBinaryInput();
     }
 
     // Note: LD2412 Bluetooth control initialization will happen later
