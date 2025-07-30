@@ -69,6 +69,11 @@ typedef struct {
 
 typedef struct {
   bool enabled;
+  int pin;
+} buzzer_config_t;
+
+typedef struct {
+  bool enabled;
   int ws;
   int sck;
   int sd;
@@ -85,6 +90,7 @@ typedef struct {
   rgb_led_config_t rgb_led;
   i2c_config_t i2c;
   speaker_config_t speaker;
+  buzzer_config_t buzzer;
   microphone_config_t microphone;
   display_config_t display;
 

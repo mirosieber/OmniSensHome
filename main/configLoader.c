@@ -114,6 +114,11 @@ esp_err_t config_load(app_config_t *config) {
     config->speaker.bclk = get_int(spk, "BCLK", -1);
     config->speaker.din = get_int(spk, "DIN", -1);
 
+    // Buzzer
+    cJSON *buzzer = cJSON_GetObjectItem(root, "Buzzer");
+    config->buzzer.enabled = get_bool(buzzer, "Enabled", false);
+    config->buzzer.pin = get_int(buzzer, "Pin", -1);
+
     // Microphone
     cJSON *mic = cJSON_GetObjectItem(root, "Microphone");
     config->microphone.enabled = get_bool(mic, "Enabled", false);
