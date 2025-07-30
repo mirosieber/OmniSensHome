@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -20,6 +21,7 @@
 #include "MTS4x.h"
 #include "OPT300x.h"
 #include "SparkFun_ENS160.h"
+#include "TaskMonitor.h"
 #include "Wire.h"
 #include "ld2412.h"
 #include "speaker.h"
@@ -914,6 +916,10 @@ extern "C" void app_main(void) {
   initArduino();
   // Setup serial communication
   Serial.begin(115200);
+
+  // Initialize TaskMonitor (reports every 30 seconds)
+  TaskMonitor::begin(30);
+
   // Allocate config on heap to avoid stack overflow
   config = (app_config_t *)malloc(sizeof(app_config_t));
   if (config == NULL) {
@@ -1233,11 +1239,17 @@ extern "C" void app_main(void) {
 
     ESP_LOGI(TAG, "Intruder detected binary sensor endpoint initialized in "
                   "FALSE state");
+
+    TaskMonitor::print_task_stats();
+    delay(1000); // Allow time for logging to complete
     // Initialize intruder detected endpoint only if it was added
     if (occupancy_sensor_enabled || switch_enabled) {
-      // Initialize binary sensor state to FALSE (no intruder detected)
-      zbIntruderDetected.setBinaryInput(false);
-      // zbIntruderDetected.reportBinaryInput();
+
+      // Initialize binary sensor state to FALSE (no intruder detecte)
+      esp_zb_lock_acquire(portMAX_DELAY);
+      // zbIntruderDetected.setBinaryInput(false);
+      //  zbIntruderDetected.reportBinaryInput();
+      esp_zb_lock_release();
     }
 
     // Note: LD2412 Bluetooth control initialization will happen later
