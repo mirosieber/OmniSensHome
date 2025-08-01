@@ -488,6 +488,11 @@ static void temp_humidity_sensor_value_update(void *arg) {
   delay(10);
   ens160.begin(config->sensors[sensor_index].i2c_address);
   ens160.setOperatingMode(SFE_ENS160_STANDARD);
+  delay(100);
+  uint8_t ensStatus = ens160.getFlags();
+  Serial.print("Gas Sensor Status Flag (0 - Standard, 1 - Warm up, 2 - Initial "
+               "Start Up): ");
+  Serial.println(ensStatus);
 
   // Additional stabilization delay
   delay(7000);
@@ -516,9 +521,16 @@ static void temp_humidity_sensor_value_update(void *arg) {
       uint16_t eco2 = ens160.getECO2();
       uint16_t tvoc = ens160.getTVOC();
 
+      ensStatus = ens160.getFlags();
+      Serial.print(
+          "Gas Sensor Status Flag (0 - Standard, 1 - Warm up, 2 - Initial "
+          "Start Up): ");
+      Serial.println(ensStatus);
+
       // Validate ENS160 readings
       if (eco2 >= 400 && eco2 <= 65000) { // Typical eCO2 range
-        // Serial.printf("[ENS160] eCO2: %d ppm, TVOC: %d ppb\r\n", eco2, tvoc);
+        // Serial.printf("[ENS160] eCO2: %d ppm, TVOC: %d ppb\r\n", eco2,
+        // tvoc);
         zbeCo2Sensor.setCarbonDioxide(eco2);
         // Check if enough time has passed since last LED update (30 seconds)
         unsigned long current_time = millis();
@@ -602,8 +614,7 @@ static void db_sensor_value_update(void *param) {
     vTaskDelete(NULL);
     return;
   }
-  zbDBSensor.setAnalogInputReporting(
-      0, 30, 10); // report every 30 seconds if value changes by 10
+
   DbSensor dbSensor(static_cast<gpio_num_t>(config->sensors[sensor_index].sck),
                     static_cast<gpio_num_t>(config->sensors[sensor_index].ws),
                     static_cast<gpio_num_t>(config->sensors[sensor_index].sd));
@@ -612,18 +623,14 @@ static void db_sensor_value_update(void *param) {
   dbSensor.begin();
 
   for (;;) {
-    float db = 40.0; // dbSensor.getCurrentDb();
-
+    float db = dbSensor.getCurrentDb();
     // Validate dB reading (typical range for INMP441)
-    if (db >= 30.0 && db <= 130.0) {
+    if (db >= 10.0 && db <= 130.0) {
       // Serial.printf("[dB Sensor] Sound level: %.2f dB\r\n", db);
 
       // Use the actual dB value directly since we configured it as a dB
       // sensor
       zbDBSensor.setAnalogInput(db);
-
-      // Report the analog input value
-      // zbDBSensor.reportAnalogInput();
     } else {
       ESP_LOGW(TAG, "Invalid dB reading: %.2f dB", db);
     }
@@ -740,9 +747,7 @@ static void occupancy_sensor_value_update(void *arg) {
   // Now that LD2412 is initialized, set the Zigbee endpoint state
   ESP_LOGI(TAG, "Setting LD2412 Bluetooth control endpoint to OFF state "
                 "(Bluetooth disabled)");
-  zbLD2412BluetoothControl.setLight(
-      false); // Start in OFF state (Bluetooth disabled)
-
+  zbLD2412BluetoothControl.restoreLight();
   // Wait a bit more to ensure the sensor is ready
   delay(1000);
 
