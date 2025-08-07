@@ -31,15 +31,15 @@
 static const char *TAG = "main";
 
 // Forward declarations
-void triggerAudioFromExternal();
 void onIntruderAlertControl(bool alert_state);
+void triggerAudioPlayback(); // Function to trigger audio playback
 
 /* Zigbee OTA configuration */
 // running muss immer eins hinterher hinken
 #define OTA_UPGRADE_RUNNING_FILE_VERSION                                       \
-  0x1 // Increment this value when the running image is updated
+  0x2 // Increment this value when the running image is updated
 #define OTA_UPGRADE_DOWNLOADED_FILE_VERSION                                    \
-  0x2 // Increment this value when the downloaded image is updated
+  0x3 // Increment this value when the downloaded image is updated
 #define OTA_UPGRADE_HW_VERSION                                                 \
   0x1 // The hardware version, this can be used to differentiate between
       // different hardware versions
@@ -262,30 +262,11 @@ void onLD2412BluetoothControl(bool bluetooth_enable) {
 void onAudioTriggerControl(bool trigger_state) {
   ESP_LOGI(TAG, "Audio trigger Zigbee command received: %s",
            trigger_state ? "ON (TRIGGER)" : "OFF (IGNORE)");
-
   if (trigger_state) {
     // Only trigger on ON commands (momentary trigger behavior)
     ESP_LOGI(TAG, "Executing audio trigger via Zigbee On/Off cluster");
-    triggerAudioFromExternal();
-
-    // Manually turn the switch back OFF after triggering without calling
-    // lightChanged() This prevents recursive callback and implements momentary
-    // trigger behavior
-    bool off_state = false;
-    esp_zb_lock_acquire(portMAX_DELAY);
-    esp_zb_zcl_status_t ret = esp_zb_zcl_set_attribute_val(
-        19, // endpoint 19
-        ESP_ZB_ZCL_CLUSTER_ID_ON_OFF, ESP_ZB_ZCL_CLUSTER_SERVER_ROLE,
-        ESP_ZB_ZCL_ATTR_ON_OFF_ON_OFF_ID, &off_state, false);
-
-    esp_zb_lock_release();
-
-    if (ret == ESP_ZB_ZCL_STATUS_SUCCESS) {
-      ESP_LOGI(TAG,
-               "Audio trigger completed - switch manually reset to OFF state");
-    } else {
-      ESP_LOGW(TAG, "Failed to reset audio trigger switch state: 0x%x", ret);
-    }
+    triggerAudioPlayback();
+    ESP_LOGI(TAG, "Audio playback completed");
   } else {
     ESP_LOGI(TAG, "Audio trigger OFF command - no action needed");
   }
@@ -329,27 +310,10 @@ void triggerAudioPlayback() {
   }
 }
 
-// Simple trigger counter for reporting trigger events
-static uint16_t audio_trigger_counter = 0;
-
-// Function to send trigger event (increment counter and report)
-void sendAudioTriggerEvent() {
-  ESP_LOGI(TAG, "Audio trigger event #%d processed", audio_trigger_counter);
-  // Custom cluster handles the trigger directly, no additional reporting needed
-}
-
-// Public function to trigger audio from external sources
-void triggerAudioFromExternal() {
-  ESP_LOGI(TAG, "External trigger request received");
-  audio_trigger_counter++; // Increment trigger counter
-  triggerAudioPlayback();
-  sendAudioTriggerEvent(); // Report the trigger event
-}
-
 /********************* Relay control functions **************************/
 void setRelay0(bool value) {
   if (config->relays[0].enabled) {
-    digitalWrite(config->relays[0].pin, value);
+    digitalWrite(config->relays[0].pin, !value);
     ESP_LOGI(TAG, "Relay 0 (%s) set to %s", config->relays[0].name,
              value ? "ON" : "OFF");
   }
@@ -357,7 +321,7 @@ void setRelay0(bool value) {
 
 void setRelay1(bool value) {
   if (config->relays[1].enabled) {
-    digitalWrite(config->relays[1].pin, value);
+    digitalWrite(config->relays[1].pin, !value);
     ESP_LOGI(TAG, "Relay 1 (%s) set to %s", config->relays[1].name,
              value ? "ON" : "OFF");
   }
@@ -365,7 +329,7 @@ void setRelay1(bool value) {
 
 void setRelay2(bool value) {
   if (config->relays[2].enabled) {
-    digitalWrite(config->relays[2].pin, value);
+    digitalWrite(config->relays[2].pin, !value);
     ESP_LOGI(TAG, "Relay 2 (%s) set to %s", config->relays[2].name,
              value ? "ON" : "OFF");
   }
@@ -373,7 +337,7 @@ void setRelay2(bool value) {
 
 void setRelay3(bool value) {
   if (config->relays[3].enabled) {
-    digitalWrite(config->relays[3].pin, value);
+    digitalWrite(config->relays[3].pin, !value);
     ESP_LOGI(TAG, "Relay 3 (%s) set to %s", config->relays[3].name,
              value ? "ON" : "OFF");
   }
@@ -387,8 +351,13 @@ static void temp_sensor_value_update(void *arg) {
   }
   MTS4Z.begin(config->i2c.sda, config->i2c.scl, MEASURE_SINGLE);
   delay(10);
+  MTS4Z.setMode(MEASURE_STOP, false); // Stop any ongoing measurement heater off
+  delay(10);
   // frequenz hier egal, da single mode aktiv
-  MTS4Z.setConfig(MPS_1Hz, AVG_32, false);
+  MTS4Z.setConfig(MPS_1Hz, AVG_8, true); // average 8 samples, sleep mode
+  delay(10);
+  MTS4Z.setMode(MEASURE_SINGLE,
+                false); // Set to single measurement mode heater off
 
   // Additional stabilization delay
   delay(5000);
@@ -1033,7 +1002,6 @@ extern "C" void app_main(void) {
   if (strcmp(config->device.type, "Router") == 0) {
     Zigbee.addEndpoint(&zbRangeExtender);
   }
-
   // Add RGB LED endpoint if enabled
   if (config->rgb_led.enabled) {
     zbRgbLight.onLightChange(onRgbLightChange);
@@ -1123,7 +1091,7 @@ extern "C" void app_main(void) {
     if (config->relays[i].enabled) {
       // Initialize relay pin as output and set to OFF
       pinMode(config->relays[i].pin, OUTPUT);
-      digitalWrite(config->relays[i].pin, LOW);
+      digitalWrite(config->relays[i].pin, HIGH); // Set to OFF state
       ESP_LOGI(TAG, "Relay %d (%s) initialized on pin %d", i,
                config->relays[i].name, config->relays[i].pin);
 
