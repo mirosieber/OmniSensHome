@@ -2,18 +2,18 @@
 #define SENSOR_H
 
 #include "Arduino.h"
-#include "MTS4x.h"
 #include "OPT300x.h"
 #include "Wire.h"
-#include <AHTxx.h>
-
-extern "C" {
+#include "Zigbee.h"
 #include "configLoader.h"
-}
 
-MTS4X MTS4Z = MTS4X();
-OPT300x opt3004;
+extern ZigbeeCore Zigbee;
+extern app_config_t *config;
+extern ZigbeeIlluminanceSensor zbLuxSensor;
 
-void initSensors(app_config_t *config);
+void printError(String text, OPT300x_ErrorCode error);
+void printResult(String text, OPT300x_S result);
+void configureSensor();
+void lux_sensor_value_update(void *arg);
 
 #endif

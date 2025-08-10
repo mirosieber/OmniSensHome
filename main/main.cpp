@@ -15,6 +15,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "Audio.h"
+#include "RGB.h"
+#include "Sensoren.h"
 #include "configLoader.h"
 
 #include "DbSensor.h"
@@ -24,7 +27,6 @@
 #include "TaskMonitor.h"
 #include "Wire.h"
 #include "ld2412.h"
-#include "speaker.h"
 #include "uart_config.h"
 #include <AHTxx.h>
 
@@ -32,14 +34,13 @@ static const char *TAG = "main";
 
 // Forward declarations
 void onIntruderAlertControl(bool alert_state);
-void triggerAudioPlayback(); // Function to trigger audio playback
 
 /* Zigbee OTA configuration */
 // running muss immer eins hinterher hinken
 #define OTA_UPGRADE_RUNNING_FILE_VERSION                                       \
-  0x2 // Increment this value when the running image is updated
+  0x3 // Increment this value when the running image is updated
 #define OTA_UPGRADE_DOWNLOADED_FILE_VERSION                                    \
-  0x3 // Increment this value when the downloaded image is updated
+  0x4 // Increment this value when the downloaded image is updated
 #define OTA_UPGRADE_HW_VERSION                                                 \
   0x1 // The hardware version, this can be used to differentiate between
       // different hardware versions
@@ -78,18 +79,10 @@ ZigbeeLight zbIntruderAlert = ZigbeeLight(20);
 ZigbeeBinary zbIntruderDetected = ZigbeeBinary(21);
 
 MTS4X MTS4Z = MTS4X();
-OPT300x opt3004;
 AHTxx aht21(AHTXX_ADDRESS_X38, AHTXX_I2C_SENSOR::AHT2x_SENSOR);
 SparkFun_ENS160 ens160;
-Speaker speaker; // Speaker instance
 
 app_config_t *config;
-
-// RGB LED brightness control
-static uint8_t rgb_brightness = 255; // Default full brightness (0-255)
-static uint8_t rgb_red = 0;
-static uint8_t rgb_green = 0;
-static uint8_t rgb_blue = 0;
 
 // LD2412 sensor variables
 static bool ld2412_initialized = false;
@@ -110,122 +103,6 @@ static const unsigned long LED_UPDATE_INTERVAL =
 
 // External reference to system_queue defined in ld2412_local component
 extern QueueHandle_t system_queue;
-
-void printError(String text, OPT300x_ErrorCode error) {
-  Serial.print(text);
-  Serial.print(": [ERROR] Code #");
-  Serial.println(error);
-}
-
-void printResult(String text, OPT300x_S result) {
-  if (result.error == NO_ERROR) {
-    Serial.print(text);
-    Serial.print(": ");
-    Serial.print(result.lux);
-    Serial.println(" lux");
-  } else {
-    printError(text, result.error);
-  }
-}
-
-void configureSensor() {
-  OPT300x_Config newConfig;
-
-  newConfig.RangeNumber = 0b1100;
-  newConfig.ConvertionTime = 0b0;
-  newConfig.Latch = 0b1;
-  newConfig.ModeOfConversionOperation = 0b11;
-
-  OPT300x_ErrorCode errorConfig = opt3004.writeConfig(newConfig);
-  if (errorConfig != NO_ERROR)
-    printError("OPT300x configuration", errorConfig);
-  else {
-    OPT300x_Config sensorConfig = opt3004.readConfig();
-    Serial.println("OPT300x Current Config:");
-    Serial.println("------------------------------");
-
-    Serial.print("Conversion ready (R):");
-    Serial.println(sensorConfig.ConversionReady, HEX);
-
-    Serial.print("Conversion time (R/W):");
-    Serial.println(sensorConfig.ConvertionTime, HEX);
-
-    Serial.print("Fault count field (R/W):");
-    Serial.println(sensorConfig.FaultCount, HEX);
-
-    Serial.print("Flag high field (R-only):");
-    Serial.println(sensorConfig.FlagHigh, HEX);
-
-    Serial.print("Flag low field (R-only):");
-    Serial.println(sensorConfig.FlagLow, HEX);
-
-    Serial.print("Latch field (R/W):");
-    Serial.println(sensorConfig.Latch, HEX);
-
-    Serial.print("Mask exponent field (R/W):");
-    Serial.println(sensorConfig.MaskExponent, HEX);
-
-    Serial.print("Mode of conversion operation (R/W):");
-    Serial.println(sensorConfig.ModeOfConversionOperation, HEX);
-
-    Serial.print("Polarity field (R/W):");
-    Serial.println(sensorConfig.Polarity, HEX);
-
-    Serial.print("Overflow flag (R-only):");
-    Serial.println(sensorConfig.OverflowFlag, HEX);
-
-    Serial.print("Range number (R/W):");
-    Serial.println(sensorConfig.RangeNumber, HEX);
-
-    Serial.println("------------------------------");
-  }
-}
-
-void setRgbLedColor(uint8_t red, uint8_t green, uint8_t blue) {
-  if (config->rgb_led.enabled) {
-    // Store the raw RGB values
-    rgb_red = red;
-    rgb_green = green;
-    rgb_blue = blue;
-
-    // Apply brightness scaling using the level from ZigbeeColorDimmableLight
-    uint8_t scaled_red = (red * rgb_brightness) / 255;
-    uint8_t scaled_green = (green * rgb_brightness) / 255;
-    uint8_t scaled_blue = (blue * rgb_brightness) / 255;
-
-    analogWrite(config->rgb_led.red_pin, scaled_red);
-    analogWrite(config->rgb_led.green_pin, scaled_green);
-    analogWrite(config->rgb_led.blue_pin, scaled_blue);
-  }
-}
-
-void setRgbLedBrightness(uint8_t brightness) {
-  rgb_brightness = brightness;
-  // Reapply current colors with new brightness
-  setRgbLedColor(rgb_red, rgb_green, rgb_blue);
-  ESP_LOGI(TAG, "RGB LED brightness set to %d", brightness);
-}
-
-/********************* RGB LED Zigbee callbacks **************************/
-void onRgbLightChange(bool state, uint8_t level) {
-  // Always store the brightness level
-  rgb_brightness = level;
-
-  if (state) {
-    // Light is ON - Set RGB LED with current color and brightness
-    setRgbLedColor(rgb_red, rgb_green, rgb_blue);
-    ESP_LOGI(TAG, "RGB LED state: ON (R:%d, G:%d, B:%d, Level:%d)", rgb_red,
-             rgb_green, rgb_blue, level);
-  } else {
-    // Light is OFF - Turn off all LEDs
-    if (config->rgb_led.enabled) {
-      analogWrite(config->rgb_led.red_pin, 0);
-      analogWrite(config->rgb_led.green_pin, 0);
-      analogWrite(config->rgb_led.blue_pin, 0);
-    }
-    ESP_LOGI(TAG, "RGB LED turned OFF");
-  }
-}
 
 /************* LD2412 Bluetooth Control Functions**************/
 void onLD2412BluetoothControl(bool bluetooth_enable) {
@@ -258,20 +135,6 @@ void onLD2412BluetoothControl(bool bluetooth_enable) {
   }
 }
 
-/************* Audio Trigger Control Functions**************/
-void onAudioTriggerControl(bool trigger_state) {
-  ESP_LOGI(TAG, "Audio trigger Zigbee command received: %s",
-           trigger_state ? "ON (TRIGGER)" : "OFF (IGNORE)");
-  if (trigger_state) {
-    // Only trigger on ON commands (momentary trigger behavior)
-    ESP_LOGI(TAG, "Executing audio trigger via Zigbee On/Off cluster");
-    triggerAudioPlayback();
-    ESP_LOGI(TAG, "Audio playback completed");
-  } else {
-    ESP_LOGI(TAG, "Audio trigger OFF command - no action needed");
-  }
-}
-
 /************* Intruder Alert Control Functions**************/
 void onIntruderAlertControl(bool alert_state) {
   ESP_LOGI(TAG, "Intruder alert Zigbee command received: %s",
@@ -297,17 +160,6 @@ void triggerIntruderDetected() {
   ESP_LOGI(TAG, "Intruder DETECTED - Reporting TRUE to coordinator");
   zbIntruderDetected.setBinaryInput(true);
   zbIntruderDetected.reportBinaryInput();
-}
-
-/************* Audio Trigger Functions **************/
-void triggerAudioPlayback() {
-  if (config->speaker.enabled) {
-    ESP_LOGI(TAG, "Audio trigger activated - Playing WAV file");
-
-    // Play audio file immediately when triggered
-    speaker.playWavFile("bell.wav");
-    ESP_LOGI(TAG, "Audio trigger playback completed");
-  }
 }
 
 /********************* Relay control functions **************************/
@@ -376,57 +228,6 @@ static void temp_sensor_value_update(void *arg) {
       ESP_LOGW(TAG, "Invalid temperature reading: %.2f°C", temperature);
     }
     delay(5000);
-  }
-}
-
-/********************* Lux sensor task **************************/
-static void lux_sensor_value_update(void *arg) {
-  // Wait for Zigbee network to be ready
-  while (!Zigbee.connected()) {
-    delay(100);
-  }
-
-  // Find the correct sensor configuration index for OPT3004
-  int sensor_index = -1;
-  for (uint8_t i = 0; config->sensors[i].type[0] != '\0'; i++) {
-    if (strcmp(config->sensors[i].type, "OPT3004") == 0) {
-      sensor_index = i;
-      break;
-    }
-  }
-
-  if (sensor_index == -1) {
-    ESP_LOGE(TAG, "OPT3004 sensor configuration not found");
-    vTaskDelete(NULL);
-    return;
-  }
-
-  Wire.begin(config->i2c.sda, config->i2c.scl);
-  opt3004.begin(config->sensors[sensor_index].i2c_address);
-  configureSensor();
-
-  // Additional stabilization delay
-  delay(3000);
-
-  ESP_LOGI(TAG, "OPT3004 lux sensor task starting...");
-
-  for (;;) {
-    OPT300x_S result = opt3004.readResult();
-    float lux = result.lux;
-
-    if (result.error == NO_ERROR && lux >= 0) {
-      // Serial.printf("[Lux Sensor] Lux: %.2f\r\n", lux);
-      if (lux > 0) {
-        float raw = 10000.0 * log10(lux);
-        zbLuxSensor.setIlluminance((uint16_t)raw);
-      } else {
-        zbLuxSensor.setIlluminance(0);
-      }
-    } else {
-      ESP_LOGW(TAG, "Error reading lux sensor or invalid value: %.2f", lux);
-    }
-
-    delay(500);
   }
 }
 
@@ -509,32 +310,32 @@ static void temp_humidity_sensor_value_update(void *arg) {
           // Set RGB LED color and brightness based on eCO2 level - only if
           // light is currently ON and 30 seconds have passed
           if (eco2 < 600 && tvoc < 65) {
-            // Good air quality - cyan with low brightness
-            rgb_red = 137;
-            rgb_green = 254;
+            // Good air quality - blue
+            rgb_red = 0;
+            rgb_green = 0;
             rgb_blue = 255;
           } else if (eco2 < 800 && tvoc < 220) {
-            // Acceptable air quality - light green with medium-low brightness
-            rgb_red = 50;
-            rgb_green = 238;
-            rgb_blue = 50;
+            // Acceptable air quality - light green
+            rgb_red = 0;
+            rgb_green = 255;
+            rgb_blue = 0;
           } else if (eco2 < 1000 && tvoc < 650) {
             // Moderate air quality - gold with medium brightness
             rgb_red = 255;
-            rgb_green = 215;
+            rgb_green = 255;
             rgb_blue = 0;
           } else if (eco2 < 1500 && tvoc < 2200) {
-            // Poor air quality - light red with high brightness
-            rgb_red = 255;
-            rgb_green = 80;
-            rgb_blue = 80;
-          } else {
-            // Very poor air quality - red with full brightness
+            // Poor air quality - red with high brightness
             rgb_red = 255;
             rgb_green = 0;
             rgb_blue = 0;
+          } else {
+            // Very poor air quality - violet with full brightness
+            rgb_red = 255;
+            rgb_green = 0;
+            rgb_blue = 255;
           }
-          setRgbLedColor(rgb_red, rgb_green, rgb_blue);
+          setRgbLedColor(config, rgb_red, rgb_green, rgb_blue);
           last_led_update_time = current_time; // Update the last update time
         }
 
@@ -586,7 +387,8 @@ static void db_sensor_value_update(void *param) {
 
   DbSensor dbSensor(static_cast<gpio_num_t>(config->sensors[sensor_index].sck),
                     static_cast<gpio_num_t>(config->sensors[sensor_index].ws),
-                    static_cast<gpio_num_t>(config->sensors[sensor_index].sd));
+                    static_cast<gpio_num_t>(config->sensors[sensor_index].sd),
+                    16000);
 
   // Sensor initialisieren
   dbSensor.begin();
@@ -891,8 +693,8 @@ extern "C" void app_main(void) {
   // Setup serial communication
   Serial.begin(115200);
 
-  // Initialize TaskMonitor (reports every 30 seconds)
-  TaskMonitor::begin(30);
+  // Initialize TaskMonitor (reports every 31 seconds)
+  TaskMonitor::begin(31);
 
   // Allocate config on heap to avoid stack overflow
   config = (app_config_t *)malloc(sizeof(app_config_t));
@@ -988,7 +790,11 @@ extern "C" void app_main(void) {
   zbLD2412BluetoothControl.onLightChange(onLD2412BluetoothControl);
 
   // Set callback function for audio trigger control
-  zbAudioTrigger.onLightChange(onAudioTriggerControl);
+  // Wrapper to match required signature for onLightChange
+  auto audioTriggerWrapper = [](bool trigger_state) {
+    onAudioTriggerControl(config, trigger_state);
+  };
+  zbAudioTrigger.onLightChange(audioTriggerWrapper);
 
   // Set callback function for intruder alert control
   zbIntruderAlert.onLightChange(onIntruderAlertControl);
@@ -1004,7 +810,11 @@ extern "C" void app_main(void) {
   }
   // Add RGB LED endpoint if enabled
   if (config->rgb_led.enabled) {
-    zbRgbLight.onLightChange(onRgbLightChange);
+    // Wrapper function to match required signature
+    auto rgbLightChangeWrapper = [](bool state, uint8_t level) {
+      onRgbLightChange(config, state, level);
+    };
+    zbRgbLight.onLightChange(rgbLightChangeWrapper);
     Zigbee.addEndpoint(&zbRgbLight);
     ESP_LOGI(TAG, "RGB LED dimmable light endpoint added");
   }
@@ -1078,7 +888,7 @@ extern "C" void app_main(void) {
 
       zbBinarySensors[i].setBinaryInputDescription(config->switches[i].name);
 
-      // Add binary sensor endpoint (more compatible than IAS zones)
+      // Add binary sensor endpoint
       Zigbee.addEndpoint(&zbBinarySensors[i]);
 
       pinMode(config->switches[i].pin, INPUT_PULLUP);
