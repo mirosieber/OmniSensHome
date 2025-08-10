@@ -26,7 +26,7 @@ jobs:
           pip install zigpy || true
 
       - name: Build ESP32-C6 firmware with ESP-IDF v5.4.2
-        uses: espressif/esp-idf-ci-action@v1
+        uses: espressif/esp-idf-ci-action@v1.2.0
         with:
           esp_idf_version: v5.4.2
           path: '.'
