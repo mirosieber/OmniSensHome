@@ -47,7 +47,7 @@ jobs:
         run: |
           VERSION_HEX=${{ steps.extract_version.outputs.version }}
           VERSION_DEC=$((VERSION_HEX))  # Convert hex to decimal
-          FILE="OmniSensHome.ota"
+          FILE="Zigbee_OTA_Client.ota"
           SIZE=$(stat -c %s "OTAcreate/$FILE")
 
           RELEASE_URL="https://github.com/mirosieber/OmniSensHome/releases/download/v$VERSION_HEX/$FILE"
