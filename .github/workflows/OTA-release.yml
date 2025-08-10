@@ -55,7 +55,7 @@ jobs:
           FILE="Zigbee_OTA_Client.ota"
           SIZE=$(stat -c %s "OTAcreate/$FILE")
 
-          RELEASE_URL="https://github.com/mirosieber/OmniSensHome/releases/download/v$VERSION_HEX/$FILE"
+          RELEASE_URL="https://github.com/mirosieber/OmniSensHome/releases/download/v$VERSION_DEC/$FILE"
 
           cat <<EOF > my_index.json
           [
