@@ -37,13 +37,13 @@ void onIntruderAlertControl(bool alert_state);
 
 /* Zigbee OTA configuration */
 // running muss immer eins hinterher hinken
-#define OTA_UPGRADE_RUNNING_FILE_VERSION                                       \
-  0x3 // Increment this value when the running image is updated
-#define OTA_UPGRADE_DOWNLOADED_FILE_VERSION                                    \
-  0x4 // Increment this value when the downloaded image is updated
-#define OTA_UPGRADE_HW_VERSION                                                 \
-  0x1 // The hardware version, this can be used to differentiate between
-      // different hardware versions
+#define OTA_UPGRADE_RUNNING_FILE_VERSION 0x3
+// Increment this value when the running image is updated
+#define OTA_UPGRADE_DOWNLOADED_FILE_VERSION 0x4
+// Increment this value when the downloaded image is updated
+#define OTA_UPGRADE_HW_VERSION 0x1
+// The hardware version, this can be used to differentiate between
+// different hardware versions
 
 // Jeder Endpoint hat eine eindeutige Nummer (zwischen 1 und 240)
 ZigbeeRangeExtender zbRangeExtender = ZigbeeRangeExtender(1);
