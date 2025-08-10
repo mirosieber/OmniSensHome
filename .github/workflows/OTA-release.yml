@@ -51,9 +51,10 @@ jobs:
           body: "Automated OTA file generated from latest push"
           draft: false
           prerelease: false
+          update_existing: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+          
       - name: Upload OTA file to release
         uses: softprops/action-gh-release@v2
         with:
