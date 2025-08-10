@@ -28,9 +28,14 @@ jobs:
       - name: Extract OTA version from main.cpp
         id: extract_version
         run: |
-          VERSION=$(grep '^#define OTA_UPGRADE_RUNNING_FILE_VERSION' main/main.cpp | sed -E 's/^#define[[:space:]]+OTA_UPGRADE_RUNNING_FILE_VERSION[[:space:]]+(0x[0-9a-fA-F]+).*/\1/')
-          echo "Found version: $VERSION"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          VERSION_HEX=$(grep '^#define OTA_UPGRADE_RUNNING_FILE_VERSION' main/main.cpp | sed -E 's/^#define[[:space:]]+OTA_UPGRADE_RUNNING_FILE_VERSION[[:space:]]+(0x[0-9a-fA-F]+).*/\1/')
+          echo "Found hex version: $VERSION_HEX"
+
+          # Convert hex to decimal
+          VERSION_DEC=$((VERSION_HEX))
+
+          echo "version_hex=$VERSION_HEX" >> $GITHUB_OUTPUT
+          echo "version_dec=$VERSION_DEC" >> $GITHUB_OUTPUT
 
       - name: Run script to generate OTA
         run: |
@@ -38,14 +43,14 @@ jobs:
             --create OTAcreate/Zigbee_OTA_Client.ota \
             --manuf-id 0x1001 \
             --image-type 0x1011 \
-            --version ${{ steps.extract_version.outputs.version }} \
+            --version ${{ steps.extract_version.outputs.version_hex }} \
             --tag-id 0x0000 \
             --tag-file build/OmniSensHome.bin
 
       - name: Generate OTA index JSON with release URL
         id: generate_index
         run: |
-          VERSION_HEX=${{ steps.extract_version.outputs.version }}
+          VERSION_HEX=${{ steps.extract_version.outputs.version_hex }}
           VERSION_DEC=$((VERSION_HEX))  # Convert hex to decimal
           FILE="Zigbee_OTA_Client.ota"
           SIZE=$(stat -c %s "OTAcreate/$FILE")
@@ -73,8 +78,8 @@ jobs:
         id: create_release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.extract_version.outputs.version }}
-          name: "Release v${{ steps.extract_version.outputs.version }}"
+          tag_name: v${{ steps.extract_version.outputs.version_dec }}
+          name: "Release v${{ steps.extract_version.outputs.version_dec }}"
           body: "Automated OTA file generated from latest push"
           draft: false
           prerelease: false
@@ -85,7 +90,7 @@ jobs:
       - name: Upload OTA file to release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.extract_version.outputs.version }}
+          tag_name: v${{ steps.extract_version.outputs.version_dec }}
           files: OTAcreate/Zigbee_OTA_Client.ota
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -96,7 +101,7 @@ jobs:
           git config user.email "github-actions@github.com"
 
           git add my_index.json
-          git commit -m "Update OTA index (version ${{ steps.extract_version.outputs.version }})" || echo "No changes"
+          git commit -m "Update OTA index (version ${{ steps.extract_version.outputs.version_dec }})" || echo "No changes"
           git push
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
