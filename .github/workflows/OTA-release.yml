@@ -57,6 +57,7 @@ jobs:
       - name: Upload OTA file to release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.extract_version.outputs.version }}
           files: OTAcreate/Zigbee_OTA_Client.ota
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
