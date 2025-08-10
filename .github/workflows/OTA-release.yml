@@ -25,8 +25,7 @@ jobs:
       - name: Extract OTA version from main.cpp
         id: extract_version
         run: |
-          VERSION=$(awk '/^#define OTA_UPGRADE_RUNNING_FILE_VERSION/ {getline; print}' main/main.cpp | sed -E 's/^(0x[0-9a-fA-F]+).*/\1/')
-
+          VERSION=$(grep '^#define OTA_UPGRADE_RUNNING_FILE_VERSION' main/main.cpp | sed -E 's/^#define[[:space:]]+OTA_UPGRADE_RUNNING_FILE_VERSION[[:space:]]+(0x[0-9a-fA-F]+).*/\1/')
           echo "Found version: $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
