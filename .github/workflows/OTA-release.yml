@@ -25,14 +25,15 @@ jobs:
         run: |
           pip install zigpy || true
 
-      - name: Build ESP32-C6 firmware with ESP-IDF v5.4.2
-        uses: espressif/esp-idf-ci-action@v1
-        with:
-          esp_idf_version: v5.4.2
-          path: '.'
-          target: 'esp32c6'
-          shell: bash
-          run: idf.py build
+# Could be recompiled, but it's unnecessary — the user commits their local, working binary anyway.
+#      - name: Build ESP32-C6 firmware with ESP-IDF v5.4.2
+#        uses: espressif/esp-idf-ci-action@v1
+#        with:
+#          esp_idf_version: v5.4.2
+#          path: '.'
+#          target: 'esp32c6'
+#          shell: bash
+#          run: idf.py build
 
 
       - name: Extract OTA version from main.cpp
