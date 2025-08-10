@@ -6,7 +6,7 @@ on:
       - main
       
 permissions:
-  contents: write  # 👈 REQUIRED for creating releases  
+  contents: write
 
 jobs:
   build-and-release:
@@ -42,6 +42,33 @@ jobs:
             --tag-id 0x0000 \
             --tag-file build/OmniSensHome.bin
 
+      - name: Generate OTA index JSON with release URL
+        id: generate_index
+        run: |
+          VERSION_HEX=${{ steps.extract_version.outputs.version }}
+          VERSION_DEC=$((VERSION_HEX))  # Convert hex to decimal
+          FILE="OmniSensHome.ota"
+          SIZE=$(stat -c %s "OTAcreate/$FILE")
+
+          RELEASE_URL="https://github.com/mirosieber/OmniSensHome/releases/download/v$VERSION_HEX/$FILE"
+
+          cat <<EOF > my_index.json
+          [
+            {
+              "fileName": "$FILE",
+              "fileVersion": $VERSION_DEC,
+              "fileSize": $SIZE,
+              "url": "$RELEASE_URL",
+              "imageType": 4113,
+              "manufacturerCode": 4097,
+              "modelId": "OmniSenseHome"
+            }
+          ]
+          EOF
+
+          cat my_index.json
+
+
       - name: Create GitHub Release
         id: create_release
         uses: softprops/action-gh-release@v2
@@ -62,3 +89,15 @@ jobs:
           files: OTAcreate/Zigbee_OTA_Client.ota
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit my_index.json to repo
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git add my_index.json
+          git commit -m "Update OTA index (version ${{ steps.extract_version.outputs.version }})" || echo "No changes"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
