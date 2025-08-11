@@ -1,5 +1,11 @@
 #include "RGB.h"
 
+// RGB LED state variables (file-local)
+static uint8_t rgb_brightness = 100; // Default brightness (0-255)
+static uint8_t rgb_red = 0;
+static uint8_t rgb_green = 0;
+static uint8_t rgb_blue = 0;
+
 const char *TAG = "RGB"; // Logging tag for ESP_LOGI
 
 void setRgbLedColor(app_config_t *config, uint8_t red, uint8_t green,

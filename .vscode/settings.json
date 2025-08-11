@@ -32,6 +32,7 @@
     "span": "cpp",
     "text_encoding": "cpp",
     "regex": "cpp",
-    "ld2412.h": "c"
+    "ld2412.h": "c",
+    "bitset": "cpp"
   }
 }

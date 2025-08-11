@@ -37,9 +37,9 @@ void onIntruderAlertControl(bool alert_state);
 
 /* Zigbee OTA configuration */
 // running muss immer eins hinterher hinken
-#define OTA_UPGRADE_RUNNING_FILE_VERSION 0x3
+#define OTA_UPGRADE_RUNNING_FILE_VERSION 0x4
 // Increment this value when the running image is updated
-#define OTA_UPGRADE_DOWNLOADED_FILE_VERSION 0x4
+#define OTA_UPGRADE_DOWNLOADED_FILE_VERSION 0x5
 // Increment this value when the downloaded image is updated
 #define OTA_UPGRADE_HW_VERSION 0x1
 // The hardware version, this can be used to differentiate between
@@ -51,10 +51,10 @@ ZigbeeIlluminanceSensor zbLuxSensor = ZigbeeIlluminanceSensor(2);
 ZigbeeTempSensor zbTempSensor = ZigbeeTempSensor(3);
 ZigbeeTempSensor zbTempHumiditySensor = ZigbeeTempSensor(4);
 ZigbeeCarbonDioxideSensor zbeCo2Sensor = ZigbeeCarbonDioxideSensor(5);
-ZigbeeCarbonDioxideSensor zbTVOCSensor =
-    ZigbeeCarbonDioxideSensor(16); // TVOC sensor endpoint
+ZigbeeCarbonDioxideSensor zbTVOCSensor = ZigbeeCarbonDioxideSensor(16);
+ZigbeeCarbonDioxideSensor zbAQISensor = ZigbeeCarbonDioxideSensor(22);
 ZigbeeAnalog zbDBSensor = ZigbeeAnalog(6);
-ZigbeeAnalog zbOccupancySensor = ZigbeeAnalog(7);
+ZigbeeOccupancySensor zbOccupancySensor = ZigbeeOccupancySensor(7);
 // Alternative: Use binary sensors instead of IAS contact switches (more
 // compatible)
 ZigbeeBinary zbBinarySensors[4] = {ZigbeeBinary(8), ZigbeeBinary(9),
@@ -290,6 +290,8 @@ static void temp_humidity_sensor_value_update(void *arg) {
       ens160.setRHCompensationFloat(ahtHumidity);
       uint16_t eco2 = ens160.getECO2();
       uint16_t tvoc = ens160.getTVOC();
+      uint8_t aqi = ens160.getAQI();
+      aqi--; // Decrement AQI for zero-based indexing
 
       ensStatus = ens160.getFlags();
       Serial.print(
@@ -302,62 +304,56 @@ static void temp_humidity_sensor_value_update(void *arg) {
         // Serial.printf("[ENS160] eCO2: %d ppm, TVOC: %d ppb\r\n", eco2,
         // tvoc);
         zbeCo2Sensor.setCarbonDioxide(eco2);
-        // Check if enough time has passed since last LED update (30 seconds)
-        unsigned long current_time = millis();
-        if (config->rgb_led.enabled && zbRgbLight.getLightState() &&
-            (current_time - last_led_update_time >= LED_UPDATE_INTERVAL)) {
-
-          // Set RGB LED color and brightness based on eCO2 level - only if
-          // light is currently ON and 30 seconds have passed
-          if (eco2 < 600 && tvoc < 65) {
-            // Good air quality - blue
-            rgb_red = 0;
-            rgb_green = 0;
-            rgb_blue = 255;
-          } else if (eco2 < 800 && tvoc < 220) {
-            // Acceptable air quality - light green
-            rgb_red = 0;
-            rgb_green = 255;
-            rgb_blue = 0;
-          } else if (eco2 < 1000 && tvoc < 650) {
-            // Moderate air quality - gold with medium brightness
-            rgb_red = 255;
-            rgb_green = 255;
-            rgb_blue = 0;
-          } else if (eco2 < 1500 && tvoc < 2200) {
-            // Poor air quality - red with high brightness
-            rgb_red = 255;
-            rgb_green = 0;
-            rgb_blue = 0;
-          } else {
-            // Very poor air quality - violet with full brightness
-            rgb_red = 255;
-            rgb_green = 0;
-            rgb_blue = 255;
-          }
-          setRgbLedColor(config, rgb_red, rgb_green, rgb_blue);
-          last_led_update_time = current_time; // Update the last update time
-        }
-
-        // Validate TVOC readings (typical range 0-60000 ppb)
-        if (tvoc <= 60000) {
-          zbTVOCSensor.setCarbonDioxide(
-              tvoc); // Using CO2 sensor for TVOC (ppb)
-        } else {
-          ESP_LOGW(TAG, "Invalid TVOC reading: %d ppb", tvoc);
-        }
       } else {
         ESP_LOGW(TAG, "Invalid eCO2 reading: %d ppm", eco2);
       }
-    } else {
-      ESP_LOGW(TAG, "Invalid AHT21 readings - Temp: %.2f°C, Humidity: %.2f%%",
-               ahtTemp, ahtHumidity);
-    }
+      // Validate TVOC readings (typical range 0-60000 ppb)
+      if (tvoc <= 60000) {
+        zbTVOCSensor.setCarbonDioxide(tvoc); // Using CO2 sensor for TVOC (ppb)
+      } else {
+        ESP_LOGW(TAG, "Invalid TVOC reading: %d ppb", tvoc);
+      }
 
-    delay(10000); // Increased delay to reduce sensor heating
+      if (aqi <= 4) {
+        // Serial.printf("[ENS160] AQI: %d\r\n", aqi);
+        // Check if enough time has passed since last LED update (30 seconds)
+        unsigned long current_time = millis();
+        if (current_time - last_led_update_time >= LED_UPDATE_INTERVAL) {
+          zbAQISensor.setCarbonDioxide(aqi); // Set AQI value for reporting
+          if (config->rgb_led.enabled && zbRgbLight.getLightState()) {
+
+            // Set RGB LED color and brightness based on eCO2 level - only if
+            // light is currently ON and 30 seconds have passed
+            if (aqi == 0) {
+              // Good air quality - blue
+              setRgbLedColor(config, 0, 0, 255);
+            } else if (aqi == 1) {
+              // Acceptable air quality - green
+              setRgbLedColor(config, 0, 255, 0);
+            } else if (aqi == 2) {
+              // Moderate air quality - yellow
+              setRgbLedColor(config, 255, 120, 0);
+            } else if (aqi == 3) {
+              // Poor air quality - red
+              setRgbLedColor(config, 255, 0, 0);
+            } else {
+              // Very poor air quality - violet
+              setRgbLedColor(config, 255, 0, 255);
+            }
+            last_led_update_time = current_time; // Update the last update time
+          } else {
+            ESP_LOGW(TAG, "Invalid AQI reading: %d", aqi);
+          }
+        }
+      } else {
+        ESP_LOGW(TAG, "Invalid AHT21 readings - Temp: %.2f°C, Humidity: %.2f%%",
+                 ahtTemp, ahtHumidity);
+      }
+
+      delay(10000); // Increased delay to reduce sensor heating
+    }
   }
 }
-
 /*****************Db sensor task ****************/
 static void db_sensor_value_update(void *param) {
   // Wait for Zigbee network to be ready
@@ -458,11 +454,11 @@ static void contact_switches_task(void *arg) {
 
           contact_states[i] = current_pin_state;
           if (current_pin_state) {
-            ESP_LOGI(
-                TAG,
-                "Binary sensor %d ON - triggering intruder detection if sensor "
-                "is activated",
-                i);
+            ESP_LOGI(TAG,
+                     "Binary sensor %d ON - triggering intruder detection if "
+                     "sensor "
+                     "is activated",
+                     i);
             triggerIntruderDetected(); // Trigger intruder detection if sensor
                                        // is ON
           }
@@ -572,10 +568,13 @@ static void occupancy_sensor_value_update(void *arg) {
         //               target_state, moving_target, stationary_target,
         //               occupancy_detected ? "DETECTED" : "CLEAR");
 
-        // Update Zigbee occupancy sensor to report target state directly
-        // Only report if target state has changed
-        if (target_state != previous_target_state) {
-          zbOccupancySensor.setAnalogInput(target_state);
+        // Only set and report if target state changes between 0 and something
+        // else
+        if ((target_state == 0 && previous_target_state != 0) ||
+            (target_state != 0 && previous_target_state == 0)) {
+          zbOccupancySensor.setOccupancy(target_state);
+          zbOccupancySensor.report(); // Report occupancy state
+
           previous_target_state = target_state; // Update previous target state
 
           ESP_LOGI(TAG,
@@ -627,9 +626,8 @@ static void occupancy_sensor_value_update(void *arg) {
           // target state wasn't already 0
           if (previous_occupancy_state && previous_target_state != 0) {
             ESP_LOGW(TAG, "Extended timeout - clearing occupancy");
-            zbOccupancySensor.setAnalogInput(0); // No target detected
-            previous_target_state = 0;           // Update previous target state
-            previous_occupancy_state = false;    // Update previous state
+            previous_target_state = 0;        // Update previous target state
+            previous_occupancy_state = false; // Update previous state
           }
 
           // Try to recover UART communication
@@ -734,6 +732,8 @@ extern "C" void app_main(void) {
                                        config->device.model);
   zbTVOCSensor.setManufacturerAndModel(config->device.manufacturer,
                                        config->device.model);
+  zbAQISensor.setManufacturerAndModel(config->device.manufacturer,
+                                      config->device.model);
   zbOccupancySensor.setManufacturerAndModel(config->device.manufacturer,
                                             config->device.model);
   zbRangeExtender.setManufacturerAndModel(config->device.manufacturer,
@@ -756,6 +756,7 @@ extern "C" void app_main(void) {
     zbLuxSensor.setPowerSource(ZB_POWER_SOURCE_BATTERY);
     zbeCo2Sensor.setPowerSource(ZB_POWER_SOURCE_BATTERY);
     zbTVOCSensor.setPowerSource(ZB_POWER_SOURCE_BATTERY);
+    zbAQISensor.setPowerSource(ZB_POWER_SOURCE_BATTERY);
     zbOccupancySensor.setPowerSource(ZB_POWER_SOURCE_BATTERY);
     zbDBSensor.setPowerSource(ZB_POWER_SOURCE_BATTERY);
     zbRangeExtender.setPowerSource(ZB_POWER_SOURCE_BATTERY);
@@ -770,6 +771,7 @@ extern "C" void app_main(void) {
     zbLuxSensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
     zbeCo2Sensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
     zbTVOCSensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
+    zbAQISensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
     zbOccupancySensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
     zbDBSensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
     zbRangeExtender.setPowerSource(ZB_POWER_SOURCE_MAINS);
@@ -837,6 +839,7 @@ extern "C" void app_main(void) {
         // Initialize ENS160 sensor
         Zigbee.addEndpoint(&zbeCo2Sensor);
         Zigbee.addEndpoint(&zbTVOCSensor); // Add TVOC endpoint
+        Zigbee.addEndpoint(&zbAQISensor);  // Add AQI endpoint
       } else if (strcmp(config->sensors[i].type, "INMP441") == 0) {
         // Initialize INMP441 sensor
         // Set up analog input for dB sensor
@@ -846,12 +849,9 @@ extern "C" void app_main(void) {
         Zigbee.addEndpoint(&zbDBSensor);
       } else if (strcmp(config->sensors[i].type, "HLK-LD2412") == 0) {
         // Initialize HLK-LD2412 sensor
-        // Configure analog input for target state reporting (0-3)
-        zbOccupancySensor.addAnalogInput();
-        zbOccupancySensor.setAnalogInputDescription("Target State");
-        zbOccupancySensor.setAnalogInputResolution(1.0); // Integer values 0-3
         Zigbee.addEndpoint(&zbOccupancySensor);
-        // Add LD2412 Bluetooth control endpoint (using standard On/Off cluster)
+        // Add LD2412 Bluetooth control endpoint (using standard On/Off
+        // cluster)
         Zigbee.addEndpoint(&zbLD2412BluetoothControl);
         occupancy_sensor_enabled = true;
       } else if (strcmp(config->sensors[i].type, "Bluetooth") == 0) {
@@ -1078,6 +1078,8 @@ extern "C" void app_main(void) {
             30, 0, 50); // min=30s, max=0 (disabled), delta=50 ppm
         zbTVOCSensor.setReporting(
             30, 0, 10); // min=30s, max=0 (disabled), delta=10 ppb
+        zbAQISensor.setReporting(31, 0,
+                                 1); // min=31s, max=0 (disabled), delta=1
         ESP_LOGI(TAG, "ENS160 air quality sensor reporting configured");
         ESP_LOGI(TAG, "ENS160 TVOC sensor reporting configured");
       } else if (strcmp(config->sensors[i].type, "INMP441") == 0) {
@@ -1088,12 +1090,6 @@ extern "C" void app_main(void) {
       } else if (strcmp(config->sensors[i].type, "HLK-LD2412") == 0) {
         xTaskCreate(occupancy_sensor_value_update, "occupancy_sensor_update",
                     4096, NULL, 7, NULL);
-        zbOccupancySensor.setAnalogInput(
-            0); // Initialize target state to 0 (no target)
-        // Set up reporting parameters after Zigbee is stable
-        zbOccupancySensor.setAnalogInputReporting(
-            5, 30, 1); // min=5s, max=30s, delta=1
-
         ESP_LOGI(TAG, "HLK-LD2412 occupancy sensor task started");
         delay(2000); // Stagger task creation
       }
