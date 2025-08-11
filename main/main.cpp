@@ -958,6 +958,8 @@ extern "C" void app_main(void) {
   bool zigbee_started = false;
   if (strcmp(config->device.type, "Router") == 0) {
     ESP_LOGI(TAG, "Starting Zigbee as Router");
+    esp_zb_aps_src_binding_table_size_set(32);
+    esp_zb_aps_dst_binding_table_size_set(32);
     if (!Zigbee.begin(ZIGBEE_ROUTER)) {
       ESP_LOGE(TAG, "Zigbee Router failed to start!");
       Serial.println("Zigbee failed to start!");
