@@ -103,7 +103,6 @@ jobs:
         with:
           tag_name: v${{ steps.extract_version.outputs.version_dec }}
           files: OTAcreate/Zigbee_OTA_Client.ota
-          update_existing: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
