@@ -1,9 +1,13 @@
 #include "DbSensor.h"
+#include "I2SFullDuplex.h"
+#include "esp_log.h"
 #include "stdint.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <math.h>
 #include <string.h>
+
+static const char *TAG = "DbSensor";
 
 // Einfacher 1. Ordnung Hochpass (Butterworth-artig)
 class SimpleHighpass {
@@ -34,41 +38,66 @@ DbSensor::DbSensor(gpio_num_t bclk, gpio_num_t ws, gpio_num_t din,
                    uint32_t sampleRate)
     : _bclkPin(bclk), _wsPin(ws), _dataPin(din), _sampleRate(sampleRate) {}
 
+DbSensor::~DbSensor() { cleanup(); }
+
 void DbSensor::begin() {
-  i2s_chan_config_t chan_cfg =
-      I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-  i2s_new_channel(&chan_cfg, nullptr, &_rx_handle);
+  ESP_LOGI(TAG, "Initializing DbSensor using shared I2S instance");
 
-  i2s_std_config_t std_cfg = {
-      .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(_sampleRate),
-      .slot_cfg = {.data_bit_width = I2S_DATA_BIT_WIDTH_32BIT,
-                   .slot_bit_width = I2S_SLOT_BIT_WIDTH_32BIT,
-                   .slot_mode = I2S_SLOT_MODE_MONO,
-                   .slot_mask = I2S_STD_SLOT_LEFT,
-                   .ws_width = 32,
-                   .ws_pol = false,
-                   .bit_shift = true,
-                   .left_align = false,
-                   .big_endian = false,
-                   .bit_order_lsb = false},
-      .gpio_cfg = {.mclk = I2S_GPIO_UNUSED,
-                   .bclk = _bclkPin,
-                   .ws = _wsPin,
-                   .dout = I2S_GPIO_UNUSED,
-                   .din = _dataPin,
-                   .invert_flags = {
-                       .mclk_inv = false, .bclk_inv = false, .ws_inv = false}}};
+  // Use shared full-duplex I2S instance
+  I2SFullDuplex &i2s = I2SFullDuplex::getInstance();
 
-  i2s_channel_init_std_mode(_rx_handle, &std_cfg);
-  i2s_channel_enable(_rx_handle);
+  // Initialize shared I2S if not already done
+  if (!i2s.isInitialized()) {
+    ESP_LOGI(TAG, "Initializing shared I2S for microphone and speaker");
+    bool success = i2s.initialize(_bclkPin,    // BCLK (19)
+                                  _wsPin,      // WS (18)
+                                  _dataPin,    // DIN (20 - microphone)
+                                  GPIO_NUM_3,  // DOUT (3 - speaker)
+                                  _sampleRate, // RX sample rate (16000)
+                                  44100        // TX sample rate (44100)
+    );
+    if (!success) {
+      ESP_LOGE(TAG, "Failed to initialize shared I2S");
+      return;
+    }
+  }
+
+  // Get RX handle for microphone
+  _rx_handle = i2s.getRxHandle();
+  if (!_rx_handle) {
+    ESP_LOGE(TAG, "Failed to get I2S RX handle");
+    return;
+  }
+
+  _isInitialized = true;
+  ESP_LOGI(TAG, "DbSensor initialized successfully using shared I2S instance");
+}
+
+void DbSensor::cleanup() {
+  if (_isInitialized) {
+    ESP_LOGI(TAG, "Cleaning up DbSensor (shared I2S remains active)");
+    _rx_handle = nullptr; // Don't delete shared handle
+    _isInitialized = false;
+    ESP_LOGI(TAG, "DbSensor cleaned up");
+  }
 }
 
 float DbSensor::getCurrentDb() {
+  if (!_isInitialized || _rx_handle == nullptr) {
+    ESP_LOGW(TAG, "DbSensor not initialized, returning minimum dB value");
+    return -120.0f;
+  }
+
   int32_t buffer[_bufferSize];
   size_t bytesRead = 0;
 
-  i2s_channel_read(_rx_handle, buffer, sizeof(buffer), &bytesRead,
-                   portMAX_DELAY);
+  esp_err_t ret = i2s_channel_read(_rx_handle, buffer, sizeof(buffer),
+                                   &bytesRead, portMAX_DELAY);
+  if (ret != ESP_OK) {
+    ESP_LOGW(TAG, "I2S read failed: %s", esp_err_to_name(ret));
+    return -120.0f;
+  }
+
   int samples = bytesRead / sizeof(int32_t);
   if (samples == 0)
     return -120.0f;

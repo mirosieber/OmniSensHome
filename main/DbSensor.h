@@ -12,8 +12,10 @@
 class DbSensor {
 public:
   DbSensor(gpio_num_t bclk, gpio_num_t ws, gpio_num_t din, uint32_t sampleRate);
+  ~DbSensor(); // Add destructor
 
   void begin();
+  void cleanup(); // Add cleanup method
   float getCurrentDb();
 
   /**
@@ -41,6 +43,7 @@ private:
   gpio_num_t _dataPin;
   uint32_t _sampleRate;
   i2s_chan_handle_t _rx_handle = nullptr;
+  bool _isInitialized = false; // Track initialization state
 
   static constexpr int _bufferSize = 512; // Anzahl Samples pro Lesevorgang
 };

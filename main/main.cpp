@@ -34,12 +34,13 @@ static const char *TAG = "main";
 
 // Forward declarations
 void onIntruderAlertControl(bool alert_state);
+void checkI2SConfiguration(app_config_t *config);
 
 /* Zigbee OTA configuration */
 // running muss immer eins hinterher hinken
-#define OTA_UPGRADE_RUNNING_FILE_VERSION 0x4
+#define OTA_UPGRADE_RUNNING_FILE_VERSION 0x5
 // Increment this value when the running image is updated
-#define OTA_UPGRADE_DOWNLOADED_FILE_VERSION 0x5
+#define OTA_UPGRADE_DOWNLOADED_FILE_VERSION 0x6
 // Increment this value when the downloaded image is updated
 #define OTA_UPGRADE_HW_VERSION 0x1
 // The hardware version, this can be used to differentiate between
@@ -294,64 +295,66 @@ static void temp_humidity_sensor_value_update(void *arg) {
       aqi--; // Decrement AQI for zero-based indexing
 
       ensStatus = ens160.getFlags();
-      Serial.print(
-          "Gas Sensor Status Flag (0 - Standard, 1 - Warm up, 2 - Initial "
-          "Start Up): ");
-      Serial.println(ensStatus);
-
-      // Validate ENS160 readings
-      if (eco2 >= 400 && eco2 <= 65000) { // Typical eCO2 range
-        // Serial.printf("[ENS160] eCO2: %d ppm, TVOC: %d ppb\r\n", eco2,
-        // tvoc);
-        zbeCo2Sensor.setCarbonDioxide(eco2);
-      } else {
-        ESP_LOGW(TAG, "Invalid eCO2 reading: %d ppm", eco2);
-      }
-      // Validate TVOC readings (typical range 0-60000 ppb)
-      if (tvoc <= 60000) {
-        zbTVOCSensor.setCarbonDioxide(tvoc); // Using CO2 sensor for TVOC (ppb)
-      } else {
-        ESP_LOGW(TAG, "Invalid TVOC reading: %d ppb", tvoc);
-      }
-
-      if (aqi <= 4) {
-        // Serial.printf("[ENS160] AQI: %d\r\n", aqi);
-        // Check if enough time has passed since last LED update (30 seconds)
-        unsigned long current_time = millis();
-        if (current_time - last_led_update_time >= LED_UPDATE_INTERVAL) {
-          zbAQISensor.setCarbonDioxide(aqi); // Set AQI value for reporting
-          if (config->rgb_led.enabled && zbRgbLight.getLightState()) {
-
-            // Set RGB LED color and brightness based on eCO2 level - only if
-            // light is currently ON and 30 seconds have passed
-            if (aqi == 0) {
-              // Good air quality - blue
-              setRgbLedColor(config, 0, 0, 255);
-            } else if (aqi == 1) {
-              // Acceptable air quality - green
-              setRgbLedColor(config, 0, 255, 0);
-            } else if (aqi == 2) {
-              // Moderate air quality - yellow
-              setRgbLedColor(config, 255, 120, 0);
-            } else if (aqi == 3) {
-              // Poor air quality - red
-              setRgbLedColor(config, 255, 0, 0);
-            } else {
-              // Very poor air quality - violet
-              setRgbLedColor(config, 255, 0, 255);
-            }
-            last_led_update_time = current_time; // Update the last update time
-          } else {
-            ESP_LOGW(TAG, "Invalid AQI reading: %d", aqi);
-          }
+      // Serial.print(
+      //     "Gas Sensor Status Flag (0 - Standard, 1 - Warm up, 2 - Initial "
+      //     "Start Up): ");
+      // Serial.println(ensStatus);
+      if (!ensStatus) { // If sensor is fully operational
+        // Validate ENS160 readings
+        if (eco2 >= 400 && eco2 <= 65000) { // Typical eCO2 range
+          // Serial.printf("[ENS160] eCO2: %d ppm, TVOC: %d ppb\r\n", eco2,
+          // tvoc);
+          zbeCo2Sensor.setCarbonDioxide(eco2);
+        } else {
+          ESP_LOGW(TAG, "Invalid eCO2 reading: %d ppm", eco2);
         }
-      } else {
-        ESP_LOGW(TAG, "Invalid AHT21 readings - Temp: %.2f°C, Humidity: %.2f%%",
-                 ahtTemp, ahtHumidity);
-      }
+        // Validate TVOC readings (typical range 0-60000 ppb)
+        if (tvoc <= 60000) {
+          zbTVOCSensor.setCarbonDioxide(
+              tvoc); // Using CO2 sensor for TVOC (ppb)
+        } else {
+          ESP_LOGW(TAG, "Invalid TVOC reading: %d ppb", tvoc);
+        }
+        if (aqi <= 4) {
+          // Serial.printf("[ENS160] AQI: %d\r\n", aqi);
+          // Check if enough time has passed since last LED update (30 seconds)
+          unsigned long current_time = millis();
+          if (current_time - last_led_update_time >= LED_UPDATE_INTERVAL) {
+            zbAQISensor.setCarbonDioxide(aqi); // Set AQI value for reporting
+            if (config->rgb_led.enabled && zbRgbLight.getLightState()) {
 
-      delay(10000); // Increased delay to reduce sensor heating
+              // Set RGB LED color and brightness based on eCO2 level - only if
+              // light is currently ON and 30 seconds have passed
+              if (aqi == 0) {
+                // Good air quality - blue
+                setRgbLedColor(config, 0, 0, 255);
+              } else if (aqi == 1) {
+                // Acceptable air quality - green
+                setRgbLedColor(config, 0, 255, 0);
+              } else if (aqi == 2) {
+                // Moderate air quality - yellow
+                setRgbLedColor(config, 255, 120, 0);
+              } else if (aqi == 3) {
+                // Poor air quality - red
+                setRgbLedColor(config, 255, 0, 0);
+              } else {
+                // Very poor air quality - violet
+                setRgbLedColor(config, 255, 0, 255);
+              }
+              ESP_LOGI(TAG, "Setting RGB LED color based on AQI: %d", aqi);
+              last_led_update_time =
+                  current_time; // Update the last update time
+            }
+          }
+        } else {
+          ESP_LOGW(TAG, "Invalid AQI reading: %d", aqi);
+        }
+      }
+    } else {
+      ESP_LOGW(TAG, "Invalid AHT21 readings - Temp: %.2f°C, Humidity: %.2f%%",
+               ahtTemp, ahtHumidity);
     }
+    delay(10000); // Increased delay to reduce sensor heating
   }
 }
 /*****************Db sensor task ****************/
@@ -398,6 +401,7 @@ static void db_sensor_value_update(void *param) {
       // Use the actual dB value directly since we configured it as a dB
       // sensor
       zbDBSensor.setAnalogInput(db);
+      // Serial.printf("[dB Sensor] Sound level: %.2f dB\r\n", db);
     } else {
       ESP_LOGW(TAG, "Invalid dB reading: %.2f dB", db);
     }
@@ -683,6 +687,81 @@ void speaker_task(void *arg) {
   }
 }
 
+/***************** I2S Configuration Check Function ****************/
+void checkI2SConfiguration(app_config_t *config) {
+  ESP_LOGI(TAG, "=== I2S Configuration Check ===");
+
+  // Check for INMP441 microphone configuration
+  bool microphone_enabled = false;
+  int mic_bclk = -1, mic_ws = -1, mic_din = -1;
+
+  for (uint8_t i = 0; config->sensors[i].type[0] != '\0'; i++) {
+    if (config->sensors[i].enabled &&
+        strcmp(config->sensors[i].type, "INMP441") == 0) {
+      microphone_enabled = true;
+      mic_bclk = config->sensors[i].sck;
+      mic_ws = config->sensors[i].ws;
+      mic_din = config->sensors[i].sd;
+      ESP_LOGI(TAG, "Microphone (INMP441) enabled - BCLK:%d, WS:%d, DIN:%d",
+               mic_bclk, mic_ws, mic_din);
+      break;
+    }
+  }
+
+  // Check speaker configuration
+  bool speaker_enabled = config->speaker.enabled;
+  int spk_bclk = config->speaker.bclk;
+  int spk_ws = config->speaker.lrc;
+  int spk_dout = config->speaker.din;
+
+  if (speaker_enabled) {
+    ESP_LOGI(TAG, "Speaker enabled - BCLK:%d, WS:%d, DOUT:%d", spk_bclk, spk_ws,
+             spk_dout);
+  }
+
+  // Analyze configuration
+  if (microphone_enabled && speaker_enabled) {
+    ESP_LOGI(TAG, "Both microphone and speaker are enabled");
+
+    // Check pin sharing
+    bool bclk_shared = (mic_bclk == spk_bclk);
+    bool ws_shared = (mic_ws == spk_ws);
+    bool data_conflict = (mic_din == spk_dout);
+
+    if (bclk_shared && ws_shared && !data_conflict) {
+      ESP_LOGI(
+          TAG,
+          "✓ Valid configuration: BCLK and WS shared, separate data lines");
+      ESP_LOGI(
+          TAG,
+          "✓ Devices will work in time-division mode (managed by I2SManager)");
+    } else if (!bclk_shared && !ws_shared && !data_conflict) {
+      ESP_LOGI(TAG, "✓ Valid configuration: Completely separate pins");
+      ESP_LOGI(TAG, "✓ Devices can potentially work simultaneously (if ESP32 "
+                    "supports multiple I2S)");
+    } else if (data_conflict) {
+      ESP_LOGW(TAG, "⚠ Warning: Data line conflict detected!");
+      ESP_LOGW(TAG, "⚠ Microphone DIN and Speaker DOUT use same pin %d",
+               mic_din);
+      ESP_LOGW(TAG, "⚠ This configuration will not work properly");
+    } else {
+      ESP_LOGW(TAG, "⚠ Warning: Partial pin sharing detected");
+      ESP_LOGW(TAG, "⚠ BCLK shared: %s, WS shared: %s",
+               bclk_shared ? "YES" : "NO", ws_shared ? "YES" : "NO");
+      ESP_LOGW(TAG, "⚠ This may cause issues - recommend full sharing or full "
+                    "separation");
+    }
+  } else if (microphone_enabled) {
+    ESP_LOGI(TAG, "✓ Only microphone enabled - no conflicts possible");
+  } else if (speaker_enabled) {
+    ESP_LOGI(TAG, "✓ Only speaker enabled - no conflicts possible");
+  } else {
+    ESP_LOGI(TAG, "No I2S devices enabled");
+  }
+
+  ESP_LOGI(TAG, "=== I2S Configuration Check Complete ===");
+}
+
 /***************** Main application entry point ****************/
 
 extern "C" void app_main(void) {
@@ -709,6 +788,9 @@ extern "C" void app_main(void) {
   }
   ESP_LOGI(TAG, "Device Model: %s", config->device.model);
 
+  // Check I2S configuration for potential conflicts
+  checkI2SConfiguration(config);
+
   // Init button for factory reset
   pinMode(config->factory_reset_pin, INPUT_PULLUP);
 
@@ -716,9 +798,9 @@ extern "C" void app_main(void) {
     pinMode(config->rgb_led.red_pin, OUTPUT);
     pinMode(config->rgb_led.green_pin, OUTPUT);
     pinMode(config->rgb_led.blue_pin, OUTPUT);
-    digitalWrite(config->rgb_led.red_pin, LOW);
-    digitalWrite(config->rgb_led.green_pin, LOW);
-    digitalWrite(config->rgb_led.blue_pin, LOW);
+    analogWrite(config->rgb_led.red_pin, 100);
+    analogWrite(config->rgb_led.green_pin, 100);
+    analogWrite(config->rgb_led.blue_pin, 100);
   }
 
   // set Zigbee device name and model for all endpoints
@@ -956,10 +1038,11 @@ extern "C" void app_main(void) {
   ESP_LOGI(TAG, "Device type: '%s'", config->device.type);
 
   bool zigbee_started = false;
+  // enlarge binding tables to support more endpoints
+  esp_zb_aps_src_binding_table_size_set(32);
+  esp_zb_aps_dst_binding_table_size_set(32);
   if (strcmp(config->device.type, "Router") == 0) {
     ESP_LOGI(TAG, "Starting Zigbee as Router");
-    esp_zb_aps_src_binding_table_size_set(32);
-    esp_zb_aps_dst_binding_table_size_set(32);
     if (!Zigbee.begin(ZIGBEE_ROUTER)) {
       ESP_LOGE(TAG, "Zigbee Router failed to start!");
       Serial.println("Zigbee failed to start!");
@@ -994,6 +1077,11 @@ extern "C" void app_main(void) {
     while (!Zigbee.connected()) {
       Serial.print(".");
       delay(100);
+      if (connection_timeout % 10 == 0) { // Blink RGB LED every 1 second
+        onRgbLightChange(config, true,
+                         100); // Blink RGB LED to indicate connection
+      }
+
       connection_timeout++;
 
       // Add timeout after 5 minutes (3000 * 100ms = 300 seconds)
@@ -1007,10 +1095,10 @@ extern "C" void app_main(void) {
     Serial.println();
     ESP_LOGI(TAG, "Zigbee network connection established successfully!");
 
-    // Initialize RGB LED state now that Zigbee is connected
+    // Turn ON RGB LED to indicate connection
     if (config->rgb_led.enabled) {
-      zbRgbLight.setLight(true, 100); // Start in ON state
-      ESP_LOGI(TAG, "RGB LED dimmable light initialized in on state");
+      setRgbLedColor(config, 255, 255, 255);
+      zbRgbLight.setLight(true, 100);
     }
 
     // Initialize audio trigger state now that Zigbee is connected
@@ -1043,6 +1131,13 @@ extern "C" void app_main(void) {
   ESP_LOGI(TAG, "Zigbee network connected. Waiting 10 seconds for network "
                 "stabilization...");
   delay(10000);
+
+  // check if boot is pressed for factory reset
+  if (digitalRead(BOOT_PIN) == LOW) {
+    ESP_LOGI(TAG, "Boot button pressed. Starting factory reset in 1s...");
+    delay(1000);           // Wait a bit before factory reset actions
+    Zigbee.factoryReset(); // Reset Zigbee network
+  }
 
   // Create sensor tasks only for enabled sensors based on config
   ESP_LOGI(TAG, "Starting sensor tasks with staggered initialization...");

@@ -1,4 +1,5 @@
 #include "speaker.h"
+#include "I2SFullDuplex.h"
 #include "esp_spiffs.h"
 
 // Static variable definition
@@ -31,12 +32,9 @@ bool Speaker::initializeSPIFFS() {
   }
 
   // SPIFFS is already mounted by configLoader at /spiffs
-  // We don't need to call SPIFFS.begin() as it's already mounted via ESP-IDF
-  // API
   Serial.println("Using existing SPIFFS mount at /spiffs...");
 
   // Test if SPIFFS is accessible by trying to open a directory
-  // Use standard C library functions since ESP-IDF mounted it
   FILE *test = fopen("/spiffs/config.json", "r");
   if (!test) {
     Serial.println(
@@ -83,53 +81,38 @@ void Speaker::setupI2S() {
     return;
   }
 
-  // Create I2S channel configuration
-  i2s_chan_config_t chan_cfg =
-      I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_AUTO, I2S_ROLE_MASTER);
+  Serial.printf("Initializing Speaker using shared I2S instance on pins "
+                "BCLK:%d, WS:%d, DOUT:%d\n",
+                _bckPin, _wsPin, _dataPin);
 
-  esp_err_t ret = i2s_new_channel(&chan_cfg, &_tx_handle, NULL);
-  if (ret != ESP_OK) {
-    Serial.printf("Failed to create I2S channel: %d\n", ret);
+  // Use shared full-duplex I2S instance
+  I2SFullDuplex &i2s = I2SFullDuplex::getInstance();
+
+  // Initialize shared I2S if not already done
+  if (!i2s.isInitialized()) {
+    Serial.println("Initializing shared I2S for speaker and microphone");
+    bool success = i2s.initialize(_bckPin,        // BCLK (19)
+                                  _wsPin,         // WS (18)
+                                  GPIO_NUM_20,    // DIN (20 - microphone)
+                                  _dataPin,       // DOUT (3 - speaker)
+                                  16000,          // RX sample rate (16000)
+                                  I2S_SAMPLE_RATE // TX sample rate (44100)
+    );
+    if (!success) {
+      Serial.println("Failed to initialize shared I2S");
+      return;
+    }
+  }
+
+  // Get TX handle for speaker
+  _tx_handle = i2s.getTxHandle();
+  if (!_tx_handle) {
+    Serial.println("Failed to get I2S TX handle");
     return;
   }
 
-  // Configure I2S standard format
-  i2s_std_config_t std_cfg = {
-      .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(I2S_SAMPLE_RATE),
-      .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT,
-                                                  I2S_SLOT_MODE_MONO),
-      .gpio_cfg =
-          {
-              .mclk = I2S_GPIO_UNUSED,
-              .bclk = static_cast<gpio_num_t>(_bckPin),
-              .ws = static_cast<gpio_num_t>(_wsPin),
-              .dout = static_cast<gpio_num_t>(_dataPin),
-              .din = I2S_GPIO_UNUSED,
-              .invert_flags =
-                  {
-                      .mclk_inv = false,
-                      .bclk_inv = false,
-                      .ws_inv = false,
-                  },
-          },
-  };
-
-  ret = i2s_channel_init_std_mode(_tx_handle, &std_cfg);
-  if (ret == ESP_OK) {
-    ret = i2s_channel_enable(_tx_handle);
-    if (ret == ESP_OK) {
-      _isInitialized = true;
-      Serial.println("I2S initialized successfully with new API");
-    } else {
-      Serial.printf("Failed to enable I2S channel: %d\n", ret);
-      i2s_del_channel(_tx_handle);
-      _tx_handle = NULL;
-    }
-  } else {
-    Serial.printf("Failed to initialize I2S standard mode: %d\n", ret);
-    i2s_del_channel(_tx_handle);
-    _tx_handle = NULL;
-  }
+  _isInitialized = true;
+  Serial.println("Speaker initialized successfully using shared I2S instance");
 }
 
 void Speaker::generateSineWave(int frequency, int16_t *buffer, int samples,
@@ -229,14 +212,12 @@ void Speaker::stopTone() {
     memset(silence, 0, samples * sizeof(int16_t));
 
     // Write silence multiple times to flush DMA buffers
-    // Keep the channel enabled to avoid issues with subsequent calls
     for (int i = 0; i < 5; i++) {
       size_t bytes_written;
       esp_err_t ret =
           i2s_channel_write(_tx_handle, silence, samples * sizeof(int16_t),
                             &bytes_written, pdMS_TO_TICKS(50));
       if (ret != ESP_OK) {
-        Serial.printf("I2S silence write failed: %d\n", ret);
         break;
       }
     }
@@ -249,13 +230,12 @@ void Speaker::stopTone() {
 }
 
 void Speaker::cleanup() {
-  if (_isInitialized && _tx_handle != NULL) {
+  if (_isInitialized) {
+    Serial.println("Cleaning up Speaker (shared I2S remains active)");
     _isPlaying = false;
-    i2s_channel_disable(_tx_handle);
-    i2s_del_channel(_tx_handle);
-    _tx_handle = NULL;
+    _tx_handle = NULL; // Don't delete shared handle
     _isInitialized = false;
-    Serial.println("I2S driver cleaned up");
+    Serial.println("Speaker cleaned up");
   }
 }
 
@@ -266,103 +246,6 @@ bool Speaker::isPlaying() { return _isPlaying; }
 void Speaker::stopPlayback() {
   _isPlaying = false;
   stopTone();
-}
-
-bool Speaker::readWavHeader(File &file, WavHeader &header) {
-  if (file.readBytes((char *)&header, sizeof(WavHeader)) != sizeof(WavHeader)) {
-    Serial.println("Failed to read WAV header");
-    return false;
-  }
-  return true;
-}
-
-// New function for standard C file operations
-bool Speaker::readWavHeaderC(FILE *file, WavHeader &header) {
-  // Reset file position to beginning
-  fseek(file, 0, SEEK_SET);
-
-  // Read the header in parts to better handle variations
-  if (fread(&header.chunkID, 4, 1, file) != 1) {
-    Serial.println("Failed to read RIFF header");
-    return false;
-  }
-
-  if (fread(&header.chunkSize, 4, 1, file) != 1) {
-    Serial.println("Failed to read chunk size");
-    return false;
-  }
-
-  if (fread(&header.format, 4, 1, file) != 1) {
-    Serial.println("Failed to read WAVE format");
-    return false;
-  }
-
-  // Now we need to find the "fmt " chunk (it might not be immediately after
-  // WAVE)
-  char chunkId[4];
-  uint32_t chunkSize;
-
-  while (fread(chunkId, 4, 1, file) == 1) {
-    if (fread(&chunkSize, 4, 1, file) != 1) {
-      Serial.println("Failed to read chunk size while searching for fmt");
-      return false;
-    }
-
-    if (strncmp(chunkId, "fmt ", 4) == 0) {
-      // Found fmt chunk
-      memcpy(header.subchunk1ID, chunkId, 4);
-      header.subchunk1Size = chunkSize;
-
-      // Read the fmt chunk data
-      if (fread(&header.audioFormat, 2, 1, file) != 1)
-        return false;
-      if (fread(&header.numChannels, 2, 1, file) != 1)
-        return false;
-      if (fread(&header.sampleRate, 4, 1, file) != 1)
-        return false;
-      if (fread(&header.byteRate, 4, 1, file) != 1)
-        return false;
-      if (fread(&header.blockAlign, 2, 1, file) != 1)
-        return false;
-      if (fread(&header.bitsPerSample, 2, 1, file) != 1)
-        return false;
-
-      // Skip any remaining bytes in the fmt chunk
-      if (chunkSize > 16) {
-        fseek(file, chunkSize - 16, SEEK_CUR);
-      }
-      break;
-    } else {
-      // Skip this chunk
-      fseek(file, chunkSize, SEEK_CUR);
-    }
-  }
-
-  // Now find the "data" chunk
-  while (fread(chunkId, 4, 1, file) == 1) {
-    if (fread(&chunkSize, 4, 1, file) != 1) {
-      Serial.println("Failed to read chunk size while searching for data");
-      return false;
-    }
-
-    if (strncmp(chunkId, "data", 4) == 0) {
-      // Found data chunk
-      memcpy(header.subchunk2ID, chunkId, 4);
-      header.subchunk2Size = chunkSize;
-      // File position is now at the start of audio data
-      break;
-    } else {
-      // Skip this chunk
-      fseek(file, chunkSize, SEEK_CUR);
-    }
-  }
-
-  Serial.printf(
-      "WAV Header parsed - Format: %d, Channels: %d, Rate: %lu, Bits: %d\n",
-      header.audioFormat, header.numChannels, (unsigned long)header.sampleRate,
-      header.bitsPerSample);
-
-  return true;
 }
 
 bool Speaker::validateWavHeader(const WavHeader &header) {
@@ -466,6 +349,103 @@ void Speaker::convert8bitTo16bit(uint8_t *input8bit, int16_t *output16bit,
     // 8-bit audio typically uses unsigned values with 128 as the center point
     output16bit[i] = ((int16_t)input8bit[i] - 128) * 256;
   }
+}
+
+bool Speaker::readWavHeader(File &file, WavHeader &header) {
+  if (file.readBytes((char *)&header, sizeof(WavHeader)) != sizeof(WavHeader)) {
+    Serial.println("Failed to read WAV header");
+    return false;
+  }
+  return true;
+}
+
+// New function for standard C file operations
+bool Speaker::readWavHeaderC(FILE *file, WavHeader &header) {
+  // Reset file position to beginning
+  fseek(file, 0, SEEK_SET);
+
+  // Read the header in parts to better handle variations
+  if (fread(&header.chunkID, 4, 1, file) != 1) {
+    Serial.println("Failed to read RIFF header");
+    return false;
+  }
+
+  if (fread(&header.chunkSize, 4, 1, file) != 1) {
+    Serial.println("Failed to read chunk size");
+    return false;
+  }
+
+  if (fread(&header.format, 4, 1, file) != 1) {
+    Serial.println("Failed to read WAVE format");
+    return false;
+  }
+
+  // Now we need to find the "fmt " chunk (it might not be immediately after
+  // WAVE)
+  char chunkId[4];
+  uint32_t chunkSize;
+
+  while (fread(chunkId, 4, 1, file) == 1) {
+    if (fread(&chunkSize, 4, 1, file) != 1) {
+      Serial.println("Failed to read chunk size while searching for fmt");
+      return false;
+    }
+
+    if (strncmp(chunkId, "fmt ", 4) == 0) {
+      // Found fmt chunk
+      memcpy(header.subchunk1ID, chunkId, 4);
+      header.subchunk1Size = chunkSize;
+
+      // Read the fmt chunk data
+      if (fread(&header.audioFormat, 2, 1, file) != 1)
+        return false;
+      if (fread(&header.numChannels, 2, 1, file) != 1)
+        return false;
+      if (fread(&header.sampleRate, 4, 1, file) != 1)
+        return false;
+      if (fread(&header.byteRate, 4, 1, file) != 1)
+        return false;
+      if (fread(&header.blockAlign, 2, 1, file) != 1)
+        return false;
+      if (fread(&header.bitsPerSample, 2, 1, file) != 1)
+        return false;
+
+      // Skip any remaining bytes in the fmt chunk
+      if (chunkSize > 16) {
+        fseek(file, chunkSize - 16, SEEK_CUR);
+      }
+      break;
+    } else {
+      // Skip this chunk
+      fseek(file, chunkSize, SEEK_CUR);
+    }
+  }
+
+  // Now find the "data" chunk
+  while (fread(chunkId, 4, 1, file) == 1) {
+    if (fread(&chunkSize, 4, 1, file) != 1) {
+      Serial.println("Failed to read chunk size while searching for data");
+      return false;
+    }
+
+    if (strncmp(chunkId, "data", 4) == 0) {
+      // Found data chunk
+      memcpy(header.subchunk2ID, chunkId, 4);
+      header.subchunk2Size = chunkSize;
+      // File position is now at the start of audio data
+      break;
+    } else {
+      // Skip this chunk
+      fseek(file, chunkSize, SEEK_CUR);
+    }
+  }
+
+  Serial.printf(
+      "WAV Header parsed - Format: %d, Channels: %d, Rate: %lu, Bits: %d\n",
+      header.audioFormat, header.numChannels, (unsigned long)header.sampleRate,
+      header.bitsPerSample);
+
+  return true;
 }
 
 void Speaker::playWavFile(const char *filename) {
@@ -672,15 +652,4 @@ void Speaker::playWavFile(const char *filename) {
 
   Serial.printf("WAV playback finished. Processed %lu samples\n",
                 (unsigned long)samplesProcessed);
-}
-
-void Speaker::playWavFileAsync(const char *filename) {
-  // Initialize SPIFFS if not already done
-  if (!initializeSPIFFS()) {
-    return;
-  }
-
-  // For async playback, you could implement this using a FreeRTOS task
-  // For now, just call the synchronous version
-  playWavFile(filename);
 }
