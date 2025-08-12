@@ -119,9 +119,9 @@ void lux_sensor_value_update(void *arg) {
         zbLuxSensor.setIlluminance(0);
       }
       if (zbRgbLight.getLightState()) {
-        // Scale brightness based on lux if lux > 5 brightness = lux * 0.5 else
-        // 0
-        setRgbLedBrightness(config, lux > 5 ? (uint8_t)(lux * 0.5) : 0);
+        // Scale brightness based on lux if lux>5 brightness = lux*0.5 else 0
+        uint8_t constrLux = constrain((uint8_t)(0.5 * lux), 0, 255);
+        setRgbLedBrightness(config, lux > 5 ? constrLux : 0);
       }
 
     } else {

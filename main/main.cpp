@@ -1,5 +1,6 @@
 #include "Arduino.h"
 #include "Zigbee.h"
+#include "esp_delta_ota.h"
 #include "esp_zigbee_attribute.h"
 #include "esp_zigbee_cluster.h"
 #include "esp_zigbee_core.h"
@@ -38,9 +39,9 @@ void checkI2SConfiguration(app_config_t *config);
 
 /* Zigbee OTA configuration */
 // running muss immer eins hinterher hinken
-#define OTA_UPGRADE_RUNNING_FILE_VERSION 0x6
+#define OTA_UPGRADE_RUNNING_FILE_VERSION 0x7
 // Increment this value when the running image is updated
-#define OTA_UPGRADE_DOWNLOADED_FILE_VERSION 0x7
+#define OTA_UPGRADE_DOWNLOADED_FILE_VERSION 0x8
 // Increment this value when the downloaded image is updated
 #define OTA_UPGRADE_HW_VERSION 0x1
 // The hardware version, this can be used to differentiate between
@@ -78,6 +79,8 @@ ZigbeeLight zbIntruderAlert = ZigbeeLight(20);
 
 // Intruder Detected binary sensor to report status to coordinator - Endpoint 21
 ZigbeeBinary zbIntruderDetected = ZigbeeBinary(21);
+
+ZigbeeLight zbAlarmTrigger = ZigbeeLight(24);
 
 // Reset Endpoint
 ZigbeeLight zbReset = ZigbeeLight(23);
@@ -139,6 +142,13 @@ void onLD2412BluetoothControl(bool bluetooth_enable) {
   }
 }
 
+// trigger Alarm
+void onAlarmTriggerControl(bool alarm_state) {
+  ESP_LOGI(TAG, "Alarm trigger Zigbee command received: %s",
+           alarm_state ? "ON (ACTIVATE)" : "OFF (DEACTIVATE)");
+  intruder_alert_triggered = alarm_state;
+}
+
 /************* Intruder Alert Control Functions**************/
 void onIntruderAlertControl(bool alert_state) {
   ESP_LOGI(TAG, "Intruder alert Zigbee command received: %s",
@@ -151,6 +161,44 @@ void onIntruderAlertControl(bool alert_state) {
     ESP_LOGI(TAG, "Intruder DETECTED - Reporting TRUE to coordinator");
     zbIntruderDetected.setBinaryInput(false);
     zbIntruderDetected.reportBinaryInput();
+  }
+}
+
+static void buzzerTask(void *arg) {
+  while (1) {
+    if (intruder_alert_triggered) {
+      // LOUD EMERGENCY PATTERN - Maximum scare factor
+
+      // Police siren style - alternating high/low
+      for (int cycle = 0; cycle < 6; cycle++) {
+        // High frequency burst
+        for (int i = 0; i < 15; i++) {
+          digitalWrite(config->buzzer.pin, HIGH);
+          delay(25);
+          digitalWrite(config->buzzer.pin, LOW);
+          delay(25);
+        }
+
+        // Low frequency burst
+        for (int i = 0; i < 8; i++) {
+          digitalWrite(config->buzzer.pin, HIGH);
+          delay(100);
+          digitalWrite(config->buzzer.pin, LOW);
+          delay(100);
+        }
+      }
+
+      // Triple blast warning
+      for (int i = 0; i < 3; i++) {
+        digitalWrite(config->buzzer.pin, HIGH);
+        delay(500);
+        digitalWrite(config->buzzer.pin, LOW);
+        delay(200);
+      }
+
+      delay(100); // Brief pause before repeating
+    }
+    vTaskDelay(100 / portTICK_PERIOD_MS);
   }
 }
 
@@ -264,9 +312,6 @@ static void temp_humidity_sensor_value_update(void *arg) {
   ens160.setOperatingMode(SFE_ENS160_STANDARD);
   delay(100);
   uint8_t ensStatus = ens160.getFlags();
-  Serial.print("Gas Sensor Status Flag (0 - Standard, 1 - Warm up, 2 - Initial "
-               "Start Up): ");
-  Serial.println(ensStatus);
 
   // Additional stabilization delay
   delay(7000);
@@ -298,10 +343,10 @@ static void temp_humidity_sensor_value_update(void *arg) {
       aqi--; // Decrement AQI for zero-based indexing
 
       ensStatus = ens160.getFlags();
-      // Serial.print(
-      //     "Gas Sensor Status Flag (0 - Standard, 1 - Warm up, 2 - Initial "
-      //     "Start Up): ");
-      // Serial.println(ensStatus);
+      Serial.print(
+          "Gas Sensor Status Flag (0 - Standard, 1 - Warm up, 2 - Initial "
+          "Start Up): ");
+      Serial.println(ensStatus);
       if (!ensStatus) { // If sensor is fully operational
         // Validate ENS160 readings
         if (eco2 >= 400 && eco2 <= 65000) { // Typical eCO2 range
@@ -393,7 +438,11 @@ static void db_sensor_value_update(void *param) {
                     16000);
 
   // Sensor initialisieren
-  dbSensor.begin();
+  if (config->speaker.enabled) {
+    dbSensor.begin(config->speaker.din);
+  } else {
+    dbSensor.begin(100); // Initialize without speaker
+  }
 
   for (;;) {
     float db = dbSensor.getCurrentDb();
@@ -419,7 +468,6 @@ static bool contact_states[4] = {false, false, false, false};
 /*****************contact switches task ****************/
 static void contact_switches_task(void *arg) {
   ESP_LOGI(TAG, "=== Binary Sensor Monitoring Task ===");
-  ESP_LOGI(TAG, "Using binary sensors (more compatible than IAS zones)");
 
   // Initialize contact states (like Arduino example)
   for (uint8_t i = 0; i < 4; i++) {
@@ -835,6 +883,8 @@ extern "C" void app_main(void) {
                                              config->device.model);
   zbReset.setManufacturerAndModel(config->device.manufacturer,
                                   config->device.model);
+  zbAlarmTrigger.setManufacturerAndModel(config->device.manufacturer,
+                                         config->device.model);
 
   // Set power source for all endpoints
   if (strcmp(config->device.power_supply, "battery") == 0) {
@@ -853,6 +903,7 @@ extern "C" void app_main(void) {
     zbIntruderAlert.setPowerSource(ZB_POWER_SOURCE_BATTERY);
     zbIntruderDetected.setPowerSource(ZB_POWER_SOURCE_BATTERY);
     zbReset.setPowerSource(ZB_POWER_SOURCE_BATTERY);
+    zbAlarmTrigger.setPowerSource(ZB_POWER_SOURCE_BATTERY);
   } else {
     zbTempSensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
     zbTempHumiditySensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
@@ -869,6 +920,7 @@ extern "C" void app_main(void) {
     zbIntruderAlert.setPowerSource(ZB_POWER_SOURCE_MAINS);
     zbIntruderDetected.setPowerSource(ZB_POWER_SOURCE_MAINS);
     zbReset.setPowerSource(ZB_POWER_SOURCE_MAINS);
+    zbAlarmTrigger.setPowerSource(ZB_POWER_SOURCE_MAINS);
   }
 
   // Set callback functions for relays change
@@ -887,6 +939,8 @@ extern "C" void app_main(void) {
   };
   zbAudioTrigger.onLightChange(audioTriggerWrapper);
 
+  zbAlarmTrigger.onLightChange(onAlarmTriggerControl);
+
   // Set callback function for intruder alert control
   zbIntruderAlert.onLightChange(onIntruderAlertControl);
 
@@ -896,7 +950,7 @@ extern "C" void app_main(void) {
       ESP_LOGI(TAG,
                "ESP32 reset command received via Zigbee - rebooting device");
       delay(1000); // Give time for the log message
-      ESP.restart();
+      Zigbee.factoryReset();
     }
   });
 
@@ -991,6 +1045,8 @@ extern "C" void app_main(void) {
       Zigbee.addEndpoint(&zbBinarySensors[i]);
 
       pinMode(config->switches[i].pin, INPUT_PULLUP);
+      ESP_LOGI(TAG, "Binary sensor %d (%s) initialized on pin %d", i,
+               config->switches[i].name, config->switches[i].pin);
       switchNr++;
     }
   }
@@ -1022,10 +1078,14 @@ extern "C" void app_main(void) {
     Zigbee.addEndpoint(&zbAudioTrigger);
     ESP_LOGI(TAG, "Audio trigger endpoint (Endpoint: 19) added - use On/Off "
                   "commands to trigger audio");
+  }
 
+  if (config->speaker.enabled || config->buzzer.enabled) {
     // Add intruder alert endpoint using standard On/Off cluster (endpoint 20)
     ESP_LOGI(TAG, "Adding intruder alert endpoint");
     Zigbee.addEndpoint(&zbIntruderAlert);
+    ESP_LOGI(TAG, "Adding alarm trigger endpoint");
+    Zigbee.addEndpoint(&zbAlarmTrigger);
   }
 
   // Add reset endpoint
@@ -1126,9 +1186,13 @@ extern "C" void app_main(void) {
     if (config->speaker.enabled) {
       zbAudioTrigger.setLight(false); // Start in OFF state
       ESP_LOGI(TAG, "Audio trigger endpoint initialized in OFF state");
+    }
 
+    if (config->speaker.enabled || config->buzzer.enabled) {
       zbIntruderAlert.setLight(false); // Start in OFF state
       ESP_LOGI(TAG, "Intruder alert endpoint initialized in OFF state");
+      zbAlarmTrigger.setLight(false); // Start in OFF state
+      ESP_LOGI(TAG, "Alarm trigger endpoint initialized in OFF state");
     }
 
     ESP_LOGI(TAG, "Intruder detected binary sensor endpoint initialized in "
@@ -1175,8 +1239,8 @@ extern "C" void app_main(void) {
       if (strcmp(config->sensors[i].type, "OPT3004") == 0) {
         xTaskCreate(lux_sensor_value_update, "lux_sensor_update", 3072, NULL, 8,
                     NULL);
-        zbLuxSensor.setReporting(5, 0,
-                                 1000); // min=5s, max=0 (disabled), delta=1000
+        zbLuxSensor.setReporting(0, 60,
+                                 1); // min=0s, max=60s, delta=1
         ESP_LOGI(TAG, "OPT3004 lux sensor task started");
         delay(2000); // Stagger task creation
 
@@ -1242,6 +1306,12 @@ extern "C" void app_main(void) {
     speaker.setupI2S();
     xTaskCreate(speaker_task, "speaker_task", 4096, NULL, 2, NULL);
     ESP_LOGI(TAG, "Speaker task started");
+  }
+
+  if (config->buzzer.enabled) {
+    pinMode(config->buzzer.pin, OUTPUT);
+    xTaskCreate(buzzerTask, "buzzer_task", 2048, NULL, 2, NULL);
+    ESP_LOGI(TAG, "Buzzer task started");
   }
 
   // Start Zigbee OTA client query, first request is within a minute and the

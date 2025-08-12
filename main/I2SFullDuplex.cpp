@@ -107,6 +107,70 @@ bool I2SFullDuplex::initialize(int bclk, int ws, int din, int dout,
   return true;
 }
 
+bool I2SFullDuplex::initialize(int bclk, int ws, int din,
+                               uint32_t sample_rate_rx) {
+  if (_initialized) {
+    ESP_LOGW(TAG, "I2S already initialized");
+    return true;
+  }
+
+  ESP_LOGI(TAG, "Initializing I2S RX only on pins BCLK:%d, WS:%d, DIN:%d", bclk,
+           ws, din);
+
+  // Create I2S channel for RX only
+  i2s_chan_config_t chan_cfg =
+      I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
+
+  esp_err_t ret = i2s_new_channel(&chan_cfg, nullptr, &_rx_handle);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to create I2S RX channel: %s", esp_err_to_name(ret));
+    return false;
+  }
+
+  // Configure RX channel (microphone)
+  i2s_std_config_t rx_cfg = {
+      .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(sample_rate_rx),
+      .slot_cfg = {.data_bit_width = I2S_DATA_BIT_WIDTH_32BIT,
+                   .slot_bit_width = I2S_SLOT_BIT_WIDTH_32BIT,
+                   .slot_mode = I2S_SLOT_MODE_MONO,
+                   .slot_mask = I2S_STD_SLOT_LEFT,
+                   .ws_width = 32,
+                   .ws_pol = false,
+                   .bit_shift = true,
+                   .left_align = false,
+                   .big_endian = false,
+                   .bit_order_lsb = false},
+      .gpio_cfg = {.mclk = I2S_GPIO_UNUSED,
+                   .bclk = static_cast<gpio_num_t>(bclk),
+                   .ws = static_cast<gpio_num_t>(ws),
+                   .dout = I2S_GPIO_UNUSED,
+                   .din = static_cast<gpio_num_t>(din),
+                   .invert_flags = {
+                       .mclk_inv = false, .bclk_inv = false, .ws_inv = false}}};
+
+  ret = i2s_channel_init_std_mode(_rx_handle, &rx_cfg);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to initialize RX channel: %s", esp_err_to_name(ret));
+    i2s_del_channel(_rx_handle);
+    _rx_handle = nullptr;
+    return false;
+  }
+
+  // Enable RX channel
+  ret = i2s_channel_enable(_rx_handle);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Failed to enable RX channel: %s", esp_err_to_name(ret));
+    i2s_del_channel(_rx_handle);
+    _rx_handle = nullptr;
+    return false;
+  }
+
+  _initialized = true;
+  _tx_handle = nullptr; // Explicitly set TX handle to null
+  ESP_LOGI(TAG, "I2S RX initialized successfully");
+  return true;
+}
+
 i2s_chan_handle_t I2SFullDuplex::getRxHandle() { return _rx_handle; }
 
 i2s_chan_handle_t I2SFullDuplex::getTxHandle() { return _tx_handle; }

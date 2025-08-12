@@ -13,6 +13,9 @@ public:
                   uint32_t sample_rate_rx = 16000,
                   uint32_t sample_rate_tx = 44100);
 
+  // Initialize the I2S RX only
+  bool initialize(int bclk, int ws, int din, uint32_t sample_rate_rx = 16000);
+
   // Get the RX handle for microphone
   i2s_chan_handle_t getRxHandle();
 

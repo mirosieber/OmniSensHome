@@ -40,7 +40,7 @@ DbSensor::DbSensor(gpio_num_t bclk, gpio_num_t ws, gpio_num_t din,
 
 DbSensor::~DbSensor() { cleanup(); }
 
-void DbSensor::begin() {
+void DbSensor::begin(uint8_t speakerPin) {
   ESP_LOGI(TAG, "Initializing DbSensor using shared I2S instance");
 
   // Use shared full-duplex I2S instance
@@ -48,14 +48,25 @@ void DbSensor::begin() {
 
   // Initialize shared I2S if not already done
   if (!i2s.isInitialized()) {
-    ESP_LOGI(TAG, "Initializing shared I2S for microphone and speaker");
-    bool success = i2s.initialize(_bclkPin,    // BCLK (19)
-                                  _wsPin,      // WS (18)
-                                  _dataPin,    // DIN (20 - microphone)
-                                  GPIO_NUM_3,  // DOUT (3 - speaker)
-                                  _sampleRate, // RX sample rate (16000)
-                                  44100        // TX sample rate (44100)
-    );
+    bool success = false;
+    if (speakerPin != 100) {
+      ESP_LOGI(TAG, "Initializing shared I2S for microphone and speaker");
+      success = i2s.initialize(_bclkPin,    // BCLK (19)
+                               _wsPin,      // WS (18)
+                               _dataPin,    // DIN (20 - microphone)
+                               speakerPin,  // DOUT (speakerPin - speaker)
+                               _sampleRate, // RX sample rate (16000)
+                               44100        // TX sample rate (44100)
+
+      );
+    } else {
+      ESP_LOGI(TAG, "Initializing shared I2S for microphone only");
+      success = i2s.initialize(_bclkPin,   // BCLK (19)
+                               _wsPin,     // WS (18)
+                               _dataPin,   // DIN (20 - microphone)
+                               _sampleRate // RX sample rate (16000)
+      );
+    }
     if (!success) {
       ESP_LOGE(TAG, "Failed to initialize shared I2S");
       return;

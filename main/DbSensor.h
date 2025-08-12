@@ -14,7 +14,8 @@ public:
   DbSensor(gpio_num_t bclk, gpio_num_t ws, gpio_num_t din, uint32_t sampleRate);
   ~DbSensor(); // Add destructor
 
-  void begin();
+  // begin method for speaker option 100 for no speaker
+  void begin(uint8_t speakerPin);
   void cleanup(); // Add cleanup method
   float getCurrentDb();
 
