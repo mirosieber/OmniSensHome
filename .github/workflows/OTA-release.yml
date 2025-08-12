@@ -85,7 +85,7 @@ jobs:
           cat my_index.json
 
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release (with OTA file)
         id: create_release
         uses: softprops/action-gh-release@v2
         with:
@@ -95,25 +95,7 @@ jobs:
           draft: false
           prerelease: false
           update_existing: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          
-      - name: Upload OTA file to release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ steps.extract_version.outputs.version_dec }}
           files: OTAcreate/Zigbee_OTA_Client.ota
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Commit my_index.json to repo
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-
-          git add my_index.json
-          git commit -m "Update OTA index (version ${{ steps.extract_version.outputs.version_dec }})" || echo "No changes"
-          git push
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+          
