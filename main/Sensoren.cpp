@@ -1,4 +1,5 @@
 #include "Sensoren.h"
+#include "RGB.h"
 
 static const char *TAG = "Sensoren"; // Logging tag for ESP_LOGI
 
@@ -117,6 +118,12 @@ void lux_sensor_value_update(void *arg) {
       } else {
         zbLuxSensor.setIlluminance(0);
       }
+      if (zbRgbLight.getLightState()) {
+        // Scale brightness based on lux if lux > 5 brightness = lux * 0.5 else
+        // 0
+        setRgbLedBrightness(config, lux > 5 ? (uint8_t)(lux * 0.5) : 0);
+      }
+
     } else {
       ESP_LOGW(TAG, "Error reading lux sensor or invalid value: %.2f", lux);
     }

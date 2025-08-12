@@ -38,9 +38,9 @@ void checkI2SConfiguration(app_config_t *config);
 
 /* Zigbee OTA configuration */
 // running muss immer eins hinterher hinken
-#define OTA_UPGRADE_RUNNING_FILE_VERSION 0x5
+#define OTA_UPGRADE_RUNNING_FILE_VERSION 0x6
 // Increment this value when the running image is updated
-#define OTA_UPGRADE_DOWNLOADED_FILE_VERSION 0x6
+#define OTA_UPGRADE_DOWNLOADED_FILE_VERSION 0x7
 // Increment this value when the downloaded image is updated
 #define OTA_UPGRADE_HW_VERSION 0x1
 // The hardware version, this can be used to differentiate between
@@ -78,6 +78,9 @@ ZigbeeLight zbIntruderAlert = ZigbeeLight(20);
 
 // Intruder Detected binary sensor to report status to coordinator - Endpoint 21
 ZigbeeBinary zbIntruderDetected = ZigbeeBinary(21);
+
+// Reset Endpoint
+ZigbeeLight zbReset = ZigbeeLight(23);
 
 MTS4X MTS4Z = MTS4X();
 AHTxx aht21(AHTXX_ADDRESS_X38, AHTXX_I2C_SENSOR::AHT2x_SENSOR);
@@ -830,6 +833,8 @@ extern "C" void app_main(void) {
                                           config->device.model);
   zbIntruderDetected.setManufacturerAndModel(config->device.manufacturer,
                                              config->device.model);
+  zbReset.setManufacturerAndModel(config->device.manufacturer,
+                                  config->device.model);
 
   // Set power source for all endpoints
   if (strcmp(config->device.power_supply, "battery") == 0) {
@@ -847,6 +852,7 @@ extern "C" void app_main(void) {
     zbAudioTrigger.setPowerSource(ZB_POWER_SOURCE_BATTERY);
     zbIntruderAlert.setPowerSource(ZB_POWER_SOURCE_BATTERY);
     zbIntruderDetected.setPowerSource(ZB_POWER_SOURCE_BATTERY);
+    zbReset.setPowerSource(ZB_POWER_SOURCE_BATTERY);
   } else {
     zbTempSensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
     zbTempHumiditySensor.setPowerSource(ZB_POWER_SOURCE_MAINS);
@@ -862,6 +868,7 @@ extern "C" void app_main(void) {
     zbAudioTrigger.setPowerSource(ZB_POWER_SOURCE_MAINS);
     zbIntruderAlert.setPowerSource(ZB_POWER_SOURCE_MAINS);
     zbIntruderDetected.setPowerSource(ZB_POWER_SOURCE_MAINS);
+    zbReset.setPowerSource(ZB_POWER_SOURCE_MAINS);
   }
 
   // Set callback functions for relays change
@@ -882,6 +889,16 @@ extern "C" void app_main(void) {
 
   // Set callback function for intruder alert control
   zbIntruderAlert.onLightChange(onIntruderAlertControl);
+
+  // Use lambda for reset control instead of named function
+  zbReset.onLightChange([](bool reset_state) {
+    if (reset_state) {
+      ESP_LOGI(TAG,
+               "ESP32 reset command received via Zigbee - rebooting device");
+      delay(1000); // Give time for the log message
+      ESP.restart();
+    }
+  });
 
   // Add OTA client to the temperature sensor endpoint since this is the only
   // one that is always awalable
@@ -1011,6 +1028,10 @@ extern "C" void app_main(void) {
     Zigbee.addEndpoint(&zbIntruderAlert);
   }
 
+  // Add reset endpoint
+  Zigbee.addEndpoint(&zbReset);
+  ESP_LOGI(TAG, "Reset endpoint added - use On/Off commands to trigger reset");
+
   // Add intruder detected endpoint only if occupancy sensor or switches are
   // enabled
   if (occupancy_sensor_enabled || switch_enabled) {
@@ -1125,6 +1146,13 @@ extern "C" void app_main(void) {
 
     // Note: LD2412 Bluetooth control initialization will happen later
     // in the occupancy_sensor_value_update task after LD2412 is initialized
+  }
+
+  // check if boot is pressed for factory reset
+  if (digitalRead(BOOT_PIN) == LOW) {
+    ESP_LOGI(TAG, "Boot button pressed. Starting factory reset in 1s...");
+    delay(1000);           // Wait a bit before factory reset actions
+    Zigbee.factoryReset(); // Reset Zigbee network
   }
 
   // Add stabilization delay after network connection
