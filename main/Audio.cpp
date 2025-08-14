@@ -10,6 +10,7 @@ void onAudioTriggerControl(app_config_t *config, bool trigger_state) {
     // Only trigger on ON commands (momentary trigger behavior)
     ESP_LOGI(TAG, "Executing audio trigger via Zigbee On/Off cluster");
     triggerAudioPlayback(config);
+    zbAudioTrigger.setLight(false);
     ESP_LOGI(TAG, "Audio playback completed");
   } else {
     ESP_LOGI(TAG, "Audio trigger OFF command - no action needed");

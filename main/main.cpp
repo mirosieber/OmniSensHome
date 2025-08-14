@@ -39,9 +39,9 @@ void checkI2SConfiguration(app_config_t *config);
 
 /* Zigbee OTA configuration */
 // running muss immer eins hinterher hinken
-#define OTA_UPGRADE_RUNNING_FILE_VERSION 0x7
+#define OTA_UPGRADE_RUNNING_FILE_VERSION 0x8
 // Increment this value when the running image is updated
-#define OTA_UPGRADE_DOWNLOADED_FILE_VERSION 0x8
+#define OTA_UPGRADE_DOWNLOADED_FILE_VERSION 0x9
 // Increment this value when the downloaded image is updated
 #define OTA_UPGRADE_HW_VERSION 0x1
 // The hardware version, this can be used to differentiate between
@@ -508,11 +508,12 @@ static void contact_switches_task(void *arg) {
           }
 
           contact_states[i] = current_pin_state;
-          if (current_pin_state) {
+          if (current_pin_state &&
+              strncmp(config->switches[i].name, "Contact", 7) == 0) {
             ESP_LOGI(TAG,
                      "Binary sensor %d ON - triggering intruder detection if "
                      "sensor "
-                     "is activated",
+                     "is activated and is Contact",
                      i);
             triggerIntruderDetected(); // Trigger intruder detection if sensor
                                        // is ON
@@ -522,6 +523,84 @@ static void contact_switches_task(void *arg) {
     }
 
     delay(50); // fast polling interval
+  }
+}
+
+/************ Relay Control Task ****************/
+
+static void relay_control_task(void *arg) {
+  ESP_LOGI(TAG, "=== Relay Control Task Started ===");
+
+  typedef struct {
+    enum { Button, Switch } type;
+  } InputType;
+
+  uint8_t buttonIndex[4]{};
+  bool buttonPressed[4]{};
+  InputType input[4]{};
+  uint8_t relayIndex[4]{};
+  uint8_t button_count = 0;
+  uint8_t relay_count = 0;
+
+  for (uint8_t i = 0; i < 4; i++) {
+    if (config->switches[i].enabled) {
+      if (strncmp(config->switches[i].name, "Button", 6) == 0) {
+        input[button_count].type = InputType::Button;
+        buttonIndex[button_count] = i; // Store index of button switch
+        button_count++;
+      } else if (strncmp(config->switches[i].name, "Switch", 6) == 0) {
+        input[button_count].type = InputType::Switch;
+        buttonIndex[button_count] = i; // Store index of switch
+        button_count++;
+      }
+    }
+    if (config->relays[i].enabled) {
+      relayIndex[relay_count] = i; // Store index of relay
+      relay_count++;
+    }
+  }
+
+  if (button_count == 0 || relay_count == 0) {
+    ESP_LOGE(TAG,
+             "No buttons or relays configured, exiting relay control task");
+    vTaskDelete(NULL);
+    return;
+  }
+
+  if (button_count != relay_count) {
+    ESP_LOGW(TAG,
+             "Number of buttons (%d) does not match number of relays (%d), "
+             "some buttons may not control relays",
+             button_count, relay_count);
+  }
+
+  for (;;) {
+    for (uint8_t i = 0; i < relay_count; i++) {
+      bool current_Relay_State = zbRelays[relayIndex[i]].getLightState();
+
+      if (input[i].type == InputType::Button) {
+        if (digitalRead(config->switches[buttonIndex[i]].pin) == LOW &&
+            !buttonPressed[buttonIndex[i]]) {
+          zbRelays[relayIndex[i]].setLight(!current_Relay_State);
+          buttonPressed[buttonIndex[i]] = true;
+        } else if (digitalRead(config->switches[buttonIndex[i]].pin) == HIGH) {
+          buttonPressed[buttonIndex[i]] = false;
+        }
+      } else if (input[i].type == InputType::Switch) {
+        if (digitalRead(config->switches[buttonIndex[i]].pin) == LOW &&
+            !buttonPressed[buttonIndex[i]]) {
+          // Switch changed to ON, toggle relay state
+          zbRelays[relayIndex[i]].setLight(!current_Relay_State);
+          buttonPressed[buttonIndex[i]] = true;
+        } else if (digitalRead(config->switches[buttonIndex[i]].pin) == HIGH &&
+                   buttonPressed[buttonIndex[i]]) {
+          // Switch changed to OFF, toggle relay state
+          zbRelays[relayIndex[i]].setLight(!current_Relay_State);
+          buttonPressed[buttonIndex[i]] = false;
+        }
+      }
+    }
+    delay(50);
   }
 }
 
@@ -949,7 +1028,9 @@ extern "C" void app_main(void) {
     if (reset_state) {
       ESP_LOGI(TAG,
                "ESP32 reset command received via Zigbee - rebooting device");
-      delay(1000); // Give time for the log message
+      delay(500);
+      zbReset.setLight(false);
+      delay(500); // Give time for the log message
       Zigbee.factoryReset();
     }
   });
@@ -1052,8 +1133,10 @@ extern "C" void app_main(void) {
   }
   ESP_LOGI(TAG, "Total enabled contact switches: %d", switchNr);
 
+  bool relays_enabled = false;
   for (uint8_t i = 0; i < 4; i++) {
     if (config->relays[i].enabled) {
+      relays_enabled = true;
       // Initialize relay pin as output and set to OFF
       pinMode(config->relays[i].pin, OUTPUT);
       digitalWrite(config->relays[i].pin, HIGH); // Set to OFF state
@@ -1295,6 +1378,11 @@ extern "C" void app_main(void) {
     xTaskCreate(contact_switches_task, "contact_switches_task", 4096, NULL, 7,
                 NULL);
     ESP_LOGI(TAG, "Binary sensor monitoring task started");
+
+    if (relays_enabled) {
+      xTaskCreate(relay_control_task, "relay_control_task", 4096, NULL, 7,
+                  NULL);
+    }
   }
 
   if (config->speaker.enabled) {
