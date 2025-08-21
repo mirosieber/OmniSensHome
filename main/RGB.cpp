@@ -26,6 +26,11 @@ void setRgbLedColor(app_config_t *config, uint8_t red, uint8_t green,
     scaled_green = (scaled_green * rgb_brightnessFactor) / 255;
     scaled_blue = (scaled_blue * rgb_brightnessFactor) / 255;
 
+    // sicherstellen, dass bei dunklen gelb werten nicht nur noch rot leuchtet
+    if ((rgb_green != 0) && (scaled_green == 0)) {
+      scaled_red = 0;
+    }
+
     analogWrite(config->rgb_led.red_pin, scaled_red);
     analogWrite(config->rgb_led.green_pin, scaled_green);
     analogWrite(config->rgb_led.blue_pin, scaled_blue);

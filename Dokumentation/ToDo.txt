@@ -1,0 +1,7 @@
+alle signale und sensoren und endpoints
+
+ota
+    versionieren
+
+z2m
+

@@ -109,19 +109,29 @@ void lux_sensor_value_update(void *arg) {
   for (;;) {
     OPT300x_S result = opt3004.readResult();
     float lux = result.lux;
-
+    // Serial.printf("[Lux Sensor] Lux: %.2f\r\n", lux);
     if (result.error == NO_ERROR && lux >= 0) {
       // Serial.printf("[Lux Sensor] Lux: %.2f\r\n", lux);
       if (lux > 0) {
-        float raw = 10000.0 * log10(lux);
+        float scaledlux = lux; //* 100.0; // nachkomastellen auch senden
+        //(kann keine nachkomastellen senden und z2m kann nicht int zu float
+        // convertieren, einzige lösung wäre analog cluster verwenden)
+        float raw = 10000.0 * log10(scaledlux);
         zbLuxSensor.setIlluminance((uint16_t)raw);
       } else {
         zbLuxSensor.setIlluminance(0);
       }
       if (zbRgbLight.getLightState()) {
-        // Scale brightness based on lux if lux>5 brightness = lux*0.5 else 0
-        uint8_t constrLux = constrain((uint8_t)(0.5 * lux), 0, 255);
-        setRgbLedBrightness(config, lux > 5 ? constrLux : 0);
+        // Scale brightness based on lux if lux>1 brightness = lux*0.5 else 0
+        float scaledLux = lux;
+        if (lux < 26) {
+          // Handle low lux case
+          scaledLux = lux + ((26 - lux) / 2);
+        } else {
+          scaledLux = lux * 0.5;
+        }
+        uint8_t constrLux = constrain((uint16_t)(scaledLux), 0, 255);
+        setRgbLedBrightness(config, lux > 1 ? constrLux : 0);
       }
 
     } else {

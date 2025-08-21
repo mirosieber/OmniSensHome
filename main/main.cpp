@@ -39,9 +39,9 @@ void checkI2SConfiguration(app_config_t *config);
 
 /* Zigbee OTA configuration */
 // running muss immer eins hinterher hinken
-#define OTA_UPGRADE_RUNNING_FILE_VERSION 0x8
+#define OTA_UPGRADE_RUNNING_FILE_VERSION 0x9
 // Increment this value when the running image is updated
-#define OTA_UPGRADE_DOWNLOADED_FILE_VERSION 0x9
+#define OTA_UPGRADE_DOWNLOADED_FILE_VERSION 0xa
 // Increment this value when the downloaded image is updated
 #define OTA_UPGRADE_HW_VERSION 0x1
 // The hardware version, this can be used to differentiate between
@@ -167,38 +167,13 @@ void onIntruderAlertControl(bool alert_state) {
 static void buzzerTask(void *arg) {
   while (1) {
     if (intruder_alert_triggered) {
-      // LOUD EMERGENCY PATTERN - Maximum scare factor
-
-      // Police siren style - alternating high/low
-      for (int cycle = 0; cycle < 6; cycle++) {
-        // High frequency burst
-        for (int i = 0; i < 15; i++) {
-          digitalWrite(config->buzzer.pin, HIGH);
-          delay(25);
-          digitalWrite(config->buzzer.pin, LOW);
-          delay(25);
-        }
-
-        // Low frequency burst
-        for (int i = 0; i < 8; i++) {
-          digitalWrite(config->buzzer.pin, HIGH);
-          delay(100);
-          digitalWrite(config->buzzer.pin, LOW);
-          delay(100);
-        }
-      }
-
-      // Triple blast warning
-      for (int i = 0; i < 3; i++) {
-        digitalWrite(config->buzzer.pin, HIGH);
-        delay(500);
-        digitalWrite(config->buzzer.pin, LOW);
-        delay(200);
-      }
-
-      delay(100); // Brief pause before repeating
+      // LOUD EMERGENCY PATTERN
+      digitalWrite(config->buzzer.pin, HIGH);
+      delay(200);
+      digitalWrite(config->buzzer.pin, LOW);
+      delay(100);
     }
-    vTaskDelay(100 / portTICK_PERIOD_MS);
+    vTaskDelay(100 / portTICK_PERIOD_MS); // Avoid busy-waiting
   }
 }
 
@@ -928,9 +903,9 @@ extern "C" void app_main(void) {
     pinMode(config->rgb_led.red_pin, OUTPUT);
     pinMode(config->rgb_led.green_pin, OUTPUT);
     pinMode(config->rgb_led.blue_pin, OUTPUT);
-    analogWrite(config->rgb_led.red_pin, 100);
+    analogWrite(config->rgb_led.red_pin, 0);
     analogWrite(config->rgb_led.green_pin, 100);
-    analogWrite(config->rgb_led.blue_pin, 100);
+    analogWrite(config->rgb_led.blue_pin, 0);
   }
 
   // set Zigbee device name and model for all endpoints
@@ -1261,7 +1236,7 @@ extern "C" void app_main(void) {
 
     // Turn ON RGB LED to indicate connection
     if (config->rgb_led.enabled) {
-      setRgbLedColor(config, 255, 255, 255);
+      setRgbLedColor(config, 0, 255, 0);
       zbRgbLight.setLight(true, 100);
     }
 
