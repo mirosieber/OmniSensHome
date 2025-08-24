@@ -9,7 +9,7 @@
 
 extern ZigbeeCore Zigbee;
 extern app_config_t *config;
-extern ZigbeeIlluminanceSensor zbLuxSensor;
+extern ZigbeeTempSensor zbLuxSensor;
 extern ZigbeeDimmableLight zbRgbLight;
 
 void printError(String text, OPT300x_ErrorCode error);

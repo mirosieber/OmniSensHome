@@ -39,9 +39,9 @@ void checkI2SConfiguration(app_config_t *config);
 
 /* Zigbee OTA configuration */
 // running muss immer eins hinterher hinken
-#define OTA_UPGRADE_RUNNING_FILE_VERSION 0x9
+#define OTA_UPGRADE_RUNNING_FILE_VERSION 0xa
 // Increment this value when the running image is updated
-#define OTA_UPGRADE_DOWNLOADED_FILE_VERSION 0xa
+#define OTA_UPGRADE_DOWNLOADED_FILE_VERSION 0xb
 // Increment this value when the downloaded image is updated
 #define OTA_UPGRADE_HW_VERSION 0x1
 // The hardware version, this can be used to differentiate between
@@ -49,7 +49,7 @@ void checkI2SConfiguration(app_config_t *config);
 
 // Jeder Endpoint hat eine eindeutige Nummer (zwischen 1 und 240)
 ZigbeeRangeExtender zbRangeExtender = ZigbeeRangeExtender(1);
-ZigbeeIlluminanceSensor zbLuxSensor = ZigbeeIlluminanceSensor(2);
+ZigbeeTempSensor zbLuxSensor = ZigbeeTempSensor(2);
 ZigbeeTempSensor zbTempSensor = ZigbeeTempSensor(3);
 ZigbeeTempSensor zbTempHumiditySensor = ZigbeeTempSensor(4);
 ZigbeeCarbonDioxideSensor zbeCo2Sensor = ZigbeeCarbonDioxideSensor(5);
@@ -903,9 +903,9 @@ extern "C" void app_main(void) {
     pinMode(config->rgb_led.red_pin, OUTPUT);
     pinMode(config->rgb_led.green_pin, OUTPUT);
     pinMode(config->rgb_led.blue_pin, OUTPUT);
-    analogWrite(config->rgb_led.red_pin, 0);
+    analogWrite(config->rgb_led.red_pin, 100);
     analogWrite(config->rgb_led.green_pin, 100);
-    analogWrite(config->rgb_led.blue_pin, 0);
+    analogWrite(config->rgb_led.blue_pin, 100);
   }
 
   // set Zigbee device name and model for all endpoints
@@ -1217,8 +1217,15 @@ extern "C" void app_main(void) {
       Serial.print(".");
       delay(100);
       if (connection_timeout % 10 == 0) { // Blink RGB LED every 1 second
-        onRgbLightChange(config, true,
-                         100); // Blink RGB LED to indicate connection
+        if (config->rgb_led.enabled) {
+          pinMode(config->rgb_led.green_pin, OUTPUT);
+          pinMode(config->rgb_led.red_pin, OUTPUT);
+          pinMode(config->rgb_led.blue_pin, OUTPUT);
+          bool current_state = digitalRead(config->rgb_led.green_pin);
+          digitalWrite(config->rgb_led.green_pin, !current_state);
+          digitalWrite(config->rgb_led.red_pin, !current_state);
+          digitalWrite(config->rgb_led.blue_pin, !current_state);
+        }
       }
 
       connection_timeout++;
@@ -1236,7 +1243,7 @@ extern "C" void app_main(void) {
 
     // Turn ON RGB LED to indicate connection
     if (config->rgb_led.enabled) {
-      setRgbLedColor(config, 0, 255, 0);
+      setRgbLedColor(config, 100, 100, 100);
       zbRgbLight.setLight(true, 100);
     }
 
@@ -1297,34 +1304,22 @@ extern "C" void app_main(void) {
       if (strcmp(config->sensors[i].type, "OPT3004") == 0) {
         xTaskCreate(lux_sensor_value_update, "lux_sensor_update", 3072, NULL, 8,
                     NULL);
-        zbLuxSensor.setReporting(0, 60,
-                                 1); // min=0s, max=60s, delta=1
         ESP_LOGI(TAG, "OPT3004 lux sensor task started");
         delay(2000); // Stagger task creation
 
       } else if (strcmp(config->sensors[i].type, "MTS4Z") == 0) {
         xTaskCreate(temp_sensor_value_update, "temp_sensor_update", 3072, NULL,
                     8, NULL);
-        zbTempSensor.setReporting(5, 0,
-                                  5); // min=5s, max=0 (disabled), delta=0.5°C
         ESP_LOGI(TAG, "MTS4Z temperature sensor task started");
         delay(2000); // Stagger task creation
 
       } else if (strcmp(config->sensors[i].type, "AHT21") == 0) {
         xTaskCreate(temp_humidity_sensor_value_update,
                     "temp_humidity_sensor_update", 4096, NULL, 8, NULL);
-        zbTempHumiditySensor.setReporting(
-            10, 0, 5); // min=10s, max=0 (disabled), delta=0.5°C
         ESP_LOGI(TAG, "AHT21 temperature/humidity sensor task started");
         delay(2000); // Stagger task creation
 
       } else if (strcmp(config->sensors[i].type, "ENS160") == 0) {
-        zbeCo2Sensor.setReporting(
-            30, 0, 50); // min=30s, max=0 (disabled), delta=50 ppm
-        zbTVOCSensor.setReporting(
-            30, 0, 10); // min=30s, max=0 (disabled), delta=10 ppb
-        zbAQISensor.setReporting(31, 0,
-                                 1); // min=31s, max=0 (disabled), delta=1
         ESP_LOGI(TAG, "ENS160 air quality sensor reporting configured");
         ESP_LOGI(TAG, "ENS160 TVOC sensor reporting configured");
       } else if (strcmp(config->sensors[i].type, "INMP441") == 0) {
