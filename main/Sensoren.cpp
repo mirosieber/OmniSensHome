@@ -1,5 +1,6 @@
 #include "Sensoren.h"
 #include "RGB.h"
+#include <math.h>
 
 static const char *TAG = "Sensoren"; // Logging tag for ESP_LOGI
 
@@ -106,6 +107,11 @@ void lux_sensor_value_update(void *arg) {
 
   ESP_LOGI(TAG, "OPT3004 lux sensor task starting...");
 
+  const double a = 1952.8196544258228;
+  const double b = -3.935184782986772;
+  const double c = -2020.7691368998812;
+  const double n = 40.78635184213555;
+
   for (;;) {
     OPT300x_S result = opt3004.readResult();
     float lux = result.lux;
@@ -121,15 +127,11 @@ void lux_sensor_value_update(void *arg) {
       }
       if (zbRgbLight.getLightState()) {
         // Scale brightness based on lux if lux>1 brightness = lux*0.5 else 0
-        float scaledLux = lux;
-        if (lux < 26) {
-          // Handle low lux case
-          scaledLux = lux + ((26 - lux) / 2);
-        } else {
-          scaledLux = lux * 0.5;
-        }
+        float scaledLux = a * pow(lux - b, 1.0 / n) + c;
         uint8_t constrLux = constrain((uint16_t)(scaledLux), 0, 255);
         setRgbLedBrightness(config, lux > 1 ? constrLux : 0);
+        // Serial.printf( "[Lux Sensor] Lux: %.2f, Scaled Lux: %.2f, Brightness:
+        // %d\r\n", lux,scaledLux, constrLux);
       }
 
     } else {
