@@ -42,9 +42,9 @@ static esp_err_t ensureNvsInit();
 
 /* Zigbee OTA configuration */
 // running muss immer eins hinterher hinken
-#define OTA_UPGRADE_RUNNING_FILE_VERSION 0x14
+#define OTA_UPGRADE_RUNNING_FILE_VERSION 0x15
 // Increment this value when the running image is updated
-#define OTA_UPGRADE_DOWNLOADED_FILE_VERSION 0x15
+#define OTA_UPGRADE_DOWNLOADED_FILE_VERSION 0x16
 // Increment this value when the downloaded image is updated
 #define OTA_UPGRADE_HW_VERSION 0x1
 // The hardware version, this can be used to differentiate between
@@ -415,6 +415,11 @@ static void temp_humidity_sensor_value_update(void *arg) {
     delay(100);
   }
 
+  // set humidity offset to last value and send it to zigbee
+  float stored_offset = readHumidityOffset();
+  zbHumidityOffset.setAnalogOutput(stored_offset);
+  zbHumidityOffset.reportAnalogOutput();
+
   // Find the correct sensor configuration index for ENS160
   int sensor_index = -1;
   for (uint8_t i = 0; config->sensors[i].type[0] != '\0'; i++) {
@@ -456,8 +461,8 @@ static void temp_humidity_sensor_value_update(void *arg) {
       zbTempHumiditySensor.setTemperature(ahtTemp);
       zbTempHumiditySensor.setHumidity(ahtHumidity);
       // Start Blinking RGB LED if high humidity
-      if ((ahtHumidity >= 60.0 || ahtHumidity <= 40.0) &&
-          config->rgb_led.enabled && zbRgbLight.getLightState()) {
+      if (ahtHumidity >= 60.0 && config->rgb_led.enabled &&
+          zbRgbLight.getLightState()) {
         toggleRgbBlink(config, true);
       } else {
         toggleRgbBlink(config, false); // Stop blinking
@@ -1555,11 +1560,6 @@ extern "C" void app_main(void) {
     xTaskCreate(buzzerTask, "buzzer_task", 2048, NULL, 2, NULL);
     ESP_LOGI(TAG, "Buzzer task started");
   }
-
-  // set humidity offset to last value and send it to zigbee
-  float stored_offset = readHumidityOffset();
-  zbHumidityOffset.setAnalogOutput(stored_offset);
-  zbHumidityOffset.reportAnalogOutput();
 
   // Start Zigbee OTA client query, first request is within a minute and the
   // next requests are sent every hour automatically
