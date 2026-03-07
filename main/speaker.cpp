@@ -143,7 +143,7 @@ void Speaker::playTone(int frequency, int duration) {
   // Reset phase for clean start
   _phase = 0.0f;
 
-  const int amplitude = 5000;
+  const int amplitude = 300;
   // Use a larger buffer size for smoother audio (10ms worth of samples)
   const int buffer_size_ms = 10;
   const int samples = (I2S_SAMPLE_RATE * buffer_size_ms) / 1000;
@@ -187,7 +187,7 @@ void Speaker::playToneAsync(int frequency) {
     return;
   }
 
-  const int amplitude = 5000;
+  const int amplitude = 300;
   const int samples = I2S_SAMPLE_RATE / frequency;
   int16_t *buffer = new int16_t[samples];
 

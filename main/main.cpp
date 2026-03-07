@@ -42,9 +42,9 @@ static esp_err_t ensureNvsInit();
 
 /* Zigbee OTA configuration */
 // running muss immer eins hinterher hinken
-#define OTA_UPGRADE_RUNNING_FILE_VERSION 0x15
+#define OTA_UPGRADE_RUNNING_FILE_VERSION 0x16
 // Increment this value when the running image is updated
-#define OTA_UPGRADE_DOWNLOADED_FILE_VERSION 0x16
+#define OTA_UPGRADE_DOWNLOADED_FILE_VERSION 0x17
 // Increment this value when the downloaded image is updated
 #define OTA_UPGRADE_HW_VERSION 0x1
 // The hardware version, this can be used to differentiate between
@@ -202,6 +202,47 @@ static void buzzerTask(void *arg) {
       delay(100);
     }
     vTaskDelay(100 / portTICK_PERIOD_MS); // Avoid busy-waiting
+  }
+}
+
+static void shortBeep() {
+  if (config->buzzer.enabled) {
+    digitalWrite(config->buzzer.pin, HIGH);
+    delay(5);
+    digitalWrite(config->buzzer.pin, LOW);
+    delay(5);
+    digitalWrite(config->buzzer.pin, HIGH);
+    delay(5);
+    digitalWrite(config->buzzer.pin, LOW);
+    delay(5);
+    digitalWrite(config->buzzer.pin, HIGH);
+    delay(5);
+    digitalWrite(config->buzzer.pin, LOW);
+    delay(5);
+    digitalWrite(config->buzzer.pin, HIGH);
+    delay(5);
+    digitalWrite(config->buzzer.pin, LOW);
+    delay(200);
+    digitalWrite(config->buzzer.pin, HIGH);
+    delay(5);
+    digitalWrite(config->buzzer.pin, LOW);
+    delay(5);
+    digitalWrite(config->buzzer.pin, HIGH);
+    delay(5);
+    digitalWrite(config->buzzer.pin, LOW);
+    delay(5);
+    digitalWrite(config->buzzer.pin, HIGH);
+    delay(5);
+    digitalWrite(config->buzzer.pin, LOW);
+    delay(5);
+    digitalWrite(config->buzzer.pin, HIGH);
+    delay(5);
+    digitalWrite(config->buzzer.pin, LOW);
+  }
+  if (config->speaker.enabled) {
+    // speaker.playTone(1000, 50); // Play 1kHz tone for 500ms
+    // delay(50);                  // Short pause between tones
+    speaker.playTone(600, 100); // Play 500Hz tone for 500ms
   }
 }
 
@@ -649,6 +690,8 @@ static void contact_switches_task(void *arg) {
                      "sensor "
                      "is activated and is Contact",
                      i);
+            shortBeep(); // Short beep on contact sensor activation to confirm
+                         // detection
             triggerIntruderDetected(); // Trigger intruder detection if sensor
                                        // is ON
           }

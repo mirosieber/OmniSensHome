@@ -245,6 +245,9 @@ The RGB LED provides visual feedback about air quality:
 | 🟣 Purple | Very Poor | Very poor air quality |
 | ⚪ White (blinking) | - | Zigbee pairing mode |
 
+**Humidity Indicator:**
+- If humidity >= 60%, LED blinks in the air quality color to indicate high humidity
+
 **Auto-Brightness:**
 - LED brightness automatically adjusts based on ambient light (OPT3004 sensor)
 - Turns off at night for comfortable sleeping

@@ -1,3 +1,4 @@
 build/
 !build/OmniSenseHome.bin
 managed_components/
+.vscode/settings.json
